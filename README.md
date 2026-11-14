@@ -1,0 +1,137 @@
+# ytraceroute
+
+Предиктивный traceroute для сетей Yggdrasil (v0.5.x). В Yggdrasil нет
+TTL/echo-механизма, поэтому настоящий traceroute невозможен — **ytraceroute
+предсказывает** маршрут пакета, воспроизводя на каждом хопе решение
+маршрутизации ironwood (жадная маршрутизация в метрике остовного дерева),
+и собирая данные об удалённых нодах через admin API
+(`debug_remoteGetSelf` / `debug_remoteGetPeers`).
+
+Прямой и обратный маршруты строятся **параллельно** — и они закономерно
+различаются: каждая нода выбирает следующий хоп по собственным измерениям
+RTT и своему снимку дерева. «Срезы» (shortcut) — это не отдельный механизм:
+любой прямой пир, находящийся ближе к адресату в метрике дерева, выигрывает
+автоматически; ytraceroute находит их и показывает, насколько срез
+сократил маршрут относительно пути через корень.
+
+## Возможности
+
+- живой вывод: хопы появляются по мере разрешения асинхронных запросов;
+- две панели (TUI): forward и reverse, спекулятивный маршрут «через корень»
+  показывается сразу и урезается на лету при подтверждении хопов/срезов;
+- режимы вывода: TUI (терминал), stream (`--no-tui`, работает по ssh без
+  терминала), NDJSON (`--json`);
+- назначение: IPv6-адрес ноды (`02…`), маршрутизируемая подсеть (`03…`),
+  hex-ключ или `self`; неизвестный адрес разрешается пробой через overlay
+  (UDP) + `getSessions`;
+- персистентный кэш узлов (`~/.cache/ytraceroute/cache.json`): повторные и
+  схожие маршруты стартуют с уже выученными координатами и списками пиров;
+- коды выхода: `0` — все направления доставлены, `1` — dead end, `2` — ошибка.
+
+## Использование
+
+```
+ytraceroute [OPTIONS] <DEST>
+
+DEST: 308:62:45:62:: | 208:84:68:55:2f91:8484:8d60:2fca | <64 hex> | self
+
+  -e, --endpoint     unix:///var/run/yggdrasil.sock (default), tcp://host:port
+                     или путь; $YTRACEROUTE_ENDPOINT
+      --no-reverse   только прямой маршрут
+      --max-hops N   (64)
+      --parallelism N параллельных admin-запросов (4)
+      --timeout SECS таймаут запроса (8; сервер режет debug_remote на 6)
+      --deadline SECS общий лимит (90)
+      --nodeinfo     подтягивать nodeinfo каждого подтверждённого хопа
+      --no-prefetch  отключить префетч списков пиров
+      --cache-ttl SECONDS  (90)  --no-cache  --cache-file PATH
+      --no-tui  --json  -v
+```
+
+Пример (нода на admin tcp://127.0.0.1:9001):
+
+```
+$ ytraceroute -e tcp://127.0.0.1:9001 308:62:45:62::
+
+→  1  201:4132:fdf6:7db:5e49:5da9:4ec5:af35  6fb34082…  [12,5]         up     d 4->3  67ms
+→  2  226:36c5:a024:2e70:bac:4ce4:455:29    00000000…  [12]           up     d 3->2
+→  3  218:71e5:78e4:8989:b71:db7f:7bf1:f1e1 000000c7…  [12,103]       down   d 2->1
+→  4  208:62:45:62:59b8:f1a2:62ca:f87c     00ffceff…  [12,103,154]   down   d 1->0
+✔ → forward: 4 hops, delivered
+←  1  226:43e9:3739:64a4:db0c:4147:abfe:6ea6 00000000… [12,5,60]  shortcut d 4->2
+← ⚡ hop 1: shortcut, skipped 1 tree hops (d 4→2)
+…
+✔ ← reverse: 3 hops, delivered
+```
+
+## Как это работает
+
+1. **Bootstrap**: `getSelf`/`getTree`/`getPeers`/`getPaths` локально +
+   загрузка кэша с диска.
+2. **Свои координаты**: трюк — `debug_remoteGetSelf` на *свой* ключ
+   заставляет ноду сделать path-lookup самой себя; ответ RPC честно
+   таймаутится, но координаты появляются в `getPaths`.
+3. **Координаты цели**: проба `debug_remoteGetSelf(dest)` (заодно RTT и
+   достижимость), координаты — из `getPaths` (подписаны самой нодой).
+4. **Обход** (каждое направление): на узле X берём его пиров
+   (`debug_remoteGetPeers`), для неизвестных пиров **веерно** стреляем
+   пробами (fire-and-forget: сам факт отправки пакета заставляет нашу ноду
+   выучить path собеседника) и собираем всё одним `getPaths`; дальше —
+   точная реплика `_lookup` из ironwood: кандидаты строго ближе к адресату,
+   `argmin(cost·dist)` с тай-брейками (dist → cost → детерминированный
+   минимальный ключ), watermark строго убывает.
+5. **Dead end / смещение цели**: если кандидатов нет или координаты
+   адресата «столкнулись» с чужой нодой — цель переучивается (1 раз) и
+   обход продолжается.
+
+Стоимость своих линков берётся из `getPeers` (ms); стоимости чужих линков
+неизвестны и берутся равными минимуму (1 ms) — при равенстве решение
+принимается по treespace-дистанции, как и в реальности при равных стоимостях.
+
+## Ограничения
+
+- Это предсказание, а не факт: чужие стоимости линков неизвестны, снимки
+  `infos` у нод расходятся во время перестроения дерева (CRDT eventual),
+  координаты адресата могут смениться в процессе (детектится финальной
+  перепроверкой).
+- `debug_remote*` требует v0.5.x на удалённых нодах; серверный таймаут 6 c;
+  списки пиров обрезаются по MTU (~2000 ключей).
+- Разрешение адреса через overlay-пробу работает только там, где живёт
+  ygg-интерфейс (запускайте ytraceroute на самой ноде); через удалённый
+  admin-endpoint передавайте hex-ключ.
+
+## Сборка
+
+Нативная:
+
+```
+cargo build --release
+```
+
+Кросс (macOS arm64 → linux aarch64, статический musl-бинарь; `rust-lld`
+уже в toolchain, внешний линкер не нужен):
+
+```
+rustup target add aarch64-unknown-linux-musl
+ln -s ~/.rustup/toolchains/*/lib/rustlib/aarch64-apple-darwin/bin/rust-lld ~/.cargo/bin/
+# .cargo/config.toml:
+#   [target.aarch64-unknown-linux-musl]
+#   linker = "rust-lld"
+#   rustflags = ["-C", "target-feature=+crt-static"]
+cargo build --release --target aarch64-unknown-linux-musl
+scp target/aarch64-unknown-linux-musl/release/ytraceroute root@vm:/root/yggtest/
+```
+
+## Структура
+
+```
+src/ygg.rs       ключи, AddrForKey/SubnetForKey, координаты, tree_dist
+src/admin.rs     клиент admin-сокета (newline-JSON, pretty-print чтение, fire())
+src/routing.rs   реплика _lookup: candidates(), select_next(), classify()
+src/model.rs     кэш узлов (TTL, in-flight дедупликация, fanout-обучение)
+src/persist.rs   дисковый кэш (атомарная запись, LRU)
+src/walk.rs      state-machine обхода направления
+src/app.rs       оркестрация: bootstrap, разрешение адресата, спек-маршрут
+src/render/      TUI / stream / NDJSON
+tests/           векторы адресов (сняты с живой ноды), сценарии маршрутизации
+```

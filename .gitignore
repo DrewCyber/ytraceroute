@@ -1,0 +1,27 @@
+# build artifacts
+/target
+
+# local caches and runtime state (may contain network topology snapshots)
+cache.json
+*.cache.json
+.ytraceroute/
+
+# environment / secrets
+.env
+.env.*
+*.key
+*.pem
+id_*
+
+# editor / OS noise
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# local agent tooling
+.zcode/
+
+# logs
+*.log
