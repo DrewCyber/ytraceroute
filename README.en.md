@@ -2,7 +2,7 @@
 
 # ytraceroute
 
-[![100% vibecode](https://img.shields.io/badge/100%25%20vibecode-%E2%9C%A8-blueviolet?style=flat-square)]
+![100% vibecode](https://img.shields.io/badge/100%25%20vibecode-%E2%9C%A8-blueviolet?style=flat-square)
 
 A predictive traceroute for Yggdrasil (v0.5.x) networks. Yggdrasil has no
 TTL/echo mechanism, so a real traceroute is impossible — **ytraceroute

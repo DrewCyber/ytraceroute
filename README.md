@@ -2,7 +2,7 @@
 
 # ytraceroute
 
-[![100% vibecode](https://img.shields.io/badge/100%25%20vibecode-%E2%9C%A8-blueviolet?style=flat-square)]
+![100% vibecode](https://img.shields.io/badge/100%25%20vibecode-%E2%9C%A8-blueviolet?style=flat-square)
 
 Предиктивный traceroute для сетей Yggdrasil (v0.5.x). В Yggdrasil нет
 TTL/echo-механизма, поэтому настоящий traceroute невозможен — **ytraceroute
