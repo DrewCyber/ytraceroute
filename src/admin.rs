@@ -82,6 +82,29 @@ trait ReadWrite: Read + Write {}
 impl ReadWrite for UnixStream {}
 impl ReadWrite for TcpStream {}
 
+/// Marker for local transport-level failures (connect/read/reset), as
+/// opposed to admin-protocol error envelopes: transport failures get one
+/// retry, protocol errors (e.g. remote debug timeouts) do not.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct TransportErr(String);
+
+impl TransportErr {
+    fn into_anyhow(self) -> anyhow::Error {
+        anyhow::Error::new(self)
+    }
+    fn new_err(msg: String) -> anyhow::Error {
+        TransportErr(msg).into_anyhow()
+    }
+    fn ctx(e: anyhow::Error, what: &str) -> anyhow::Error {
+        TransportErr(format!("{what}: {e:#}")).into_anyhow()
+    }
+}
+
+fn is_transport_err(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.is::<TransportErr>())
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[allow(dead_code)]
 pub struct GetSelfR {
@@ -190,6 +213,27 @@ impl AdminClient {
         args: Value,
         timeout: Duration,
     ) -> Result<Value> {
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            match self.request_once(name, args.clone(), timeout).await {
+                Ok(v) => return Ok(v),
+                Err(e) if attempt < 2 && is_transport_err(&e) => {
+                    // Transient local-socket hiccup (connection reset under
+                    // load, torn connect): one retry with a short backoff.
+                    tokio::time::sleep(Duration::from_millis(350)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    async fn request_once(
+        &self,
+        name: &str,
+        args: Value,
+        timeout: Duration,
+    ) -> Result<Value> {
         let _permit = self
             .gate
             .acquire()
@@ -199,7 +243,9 @@ impl AdminClient {
         let name = name.to_string();
         let name_for_err = name.clone();
         let fut = tokio::task::spawn_blocking(move || -> Result<Value> {
-            let mut stream = endpoint.connect_blocking(timeout)?;
+            let mut stream = endpoint
+                .connect_blocking(timeout)
+                .map_err(|e| TransportErr::ctx(e, "connect"))?;
             let req = json!({"request": name, "arguments": args});
             let mut buf = serde_json::to_vec(&req)?;
             buf.push(b'\n');
@@ -210,13 +256,19 @@ impl AdminClient {
             let mut it = de.into_iter::<Value>();
             match it.next() {
                 Some(Ok(v)) => Ok(v),
-                Some(Err(e)) => Err(anyhow!("invalid admin response: {e}")),
-                None => Err(anyhow!("admin socket closed before response")),
+                Some(Err(e)) => Err(TransportErr::new_err(format!(
+                    "invalid admin response: {e}"
+                ))),
+                None => Err(TransportErr::new_err(
+                    "admin socket closed before response".to_string(),
+                )),
             }
         });
         let resp = tokio::time::timeout(timeout + Duration::from_millis(500), fut)
             .await
-            .map_err(|_| anyhow!("admin request '{name_for_err}' timed out after {timeout:?}"))???;
+            .map_err(|_| TransportErr::new_err(format!(
+                "admin request '{name_for_err}' timed out after {timeout:?}"
+            )))???;
         if resp.get("status").and_then(Value::as_str) == Some("success") {
             Ok(resp.get("response").cloned().unwrap_or(Value::Null))
         } else {
@@ -364,10 +416,25 @@ impl AdminClient {
     /// coordinate learning, where the *side effect* on the local node
     /// (path lookup triggered by sending) is what we want. Bypasses the
     /// concurrency semaphore; the server-side handler simply times out.
+    ///
+    /// Admission-controlled: unbounded fanout used to open ~800 concurrent
+    /// connections (each probe holds one for its whole client timeout),
+    /// exhausting the fd budget on both sides and killing unrelated serial
+    /// requests with connection resets.
     pub fn fire(&self, name: &str, args: Value, timeout: Duration) {
         let endpoint = self.endpoint.clone();
         let name = name.to_string();
         std::thread::spawn(move || {
+            // Wait for a slot before opening another connection.
+            loop {
+                let cur = FIRE_INFLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if cur <= FIRE_MAX_CONNS {
+                    break;
+                }
+                FIRE_INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let _guard = FireGuard;
             let _ = (|| -> Result<()> {
                 let mut stream = endpoint.connect_blocking(timeout)?;
                 let mut buf =
@@ -384,9 +451,29 @@ impl AdminClient {
     }
 }
 
+static FIRE_INFLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Cap on concurrent fire-probe connections (client side; the server sees
+/// the same order). Well under a default 1024 fd limit on both sides.
+const FIRE_MAX_CONNS: usize = 192;
+
+struct FireGuard;
+impl Drop for FireGuard {
+    fn drop(&mut self) {
+        FIRE_INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transport_err_is_detectable() {
+        let t = TransportErr::new_err("admin socket closed before response".into());
+        assert!(is_transport_err(&t));
+        let proto = anyhow::anyhow!("admin 'debug_remoteGetSelf': timeout");
+        assert!(!is_transport_err(&proto));
+    }
 
     #[test]
     fn peer_latency_go_and_ng() {
