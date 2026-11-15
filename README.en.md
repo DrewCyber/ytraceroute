@@ -116,7 +116,8 @@ the first hop; remote link costs are unknowable and default to the minimum
 nearby dist existed, or unknown peers — real link costs decide) and `†`
 (the choice was made blind, many unknown peers). A hop landing at dist 1,
 or the delivery hop, is unmarked: nothing can be closer. Each direction
-ends with an aggregate `route confidence: high/medium/low` plus reasons.
+ends with an aggregate `route confidence: high/medium/low` (reasons:
+press `d` in the TUI, or use `-v` in stream mode).
 
 ## Limitations
 

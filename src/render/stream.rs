@@ -242,7 +242,7 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                 if !*delivered {
                     line.push_str(&c.dim(" \u{b7} incomplete"));
                 }
-                if !notes.is_empty() {
+                if verbose && !notes.is_empty() {
                     line.push_str(&c.dim(&format!(" \u{b7} {}", notes.join("; "))));
                 }
                 line

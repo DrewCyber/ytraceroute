@@ -46,7 +46,7 @@ struct DirState {
     notes: Vec<String>,
     deadend: Option<String>,
     done: Option<(usize, bool, Duration)>,
-    verdict: Option<(crate::routing::TrustLevel, String)>,
+    verdict: Option<(String, Vec<String>)>,
     status: Option<String>,
     target_coords: Option<Coords>,
 }
@@ -97,6 +97,7 @@ struct TuiState {
     quit: bool,
     focus: Dir,
     single_pane: bool,
+    show_details: bool,
     scroll_fwd: u16,
     scroll_rev: u16,
 }
@@ -113,6 +114,7 @@ impl TuiState {
             quit: false,
             focus: Dir::Forward,
             single_pane: false,
+            show_details: false,
             scroll_fwd: 0,
             scroll_rev: 0,
         }
@@ -195,13 +197,10 @@ impl TuiState {
                 ..
             } => {
                 let total = high + medium + low;
-                let mut line = format!(
+                let header = format!(
                     "\u{2248} route confidence: {level:?} \u{b7} {total} hops (high {high}, medium {medium}, low {low})"
                 );
-                if !notes.is_empty() {
-                    line.push_str(&format!(" \u{b7} {}", notes.join("; ")));
-                }
-                self.dir_mut(*dir).verdict = Some((*level, line));
+                self.dir_mut(*dir).verdict = Some((header, notes.clone()));
             }
             Event::Done {
                 dir,
@@ -288,7 +287,6 @@ fn fmt_coords_cols(c: &[u64], w: &[usize]) -> String {
 }
 
 fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
-    let _ = detail;
     // Column widths across every row type so the tree depth lines up.
     let mut all: Vec<&Coords> = Vec::new();
     if let Some((_, c, _)) = &st.start {
@@ -360,7 +358,7 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
                 Style::default().fg(Color::Red),
             )),
         }
-        if !h.trust_notes.is_empty() {
+        if detail && !h.trust_notes.is_empty() {
             spans.push(Span::styled(
                 format!(" \u{b7} {}", h.trust_notes.join("; ")),
                 Style::default().fg(Color::DarkGray),
@@ -392,9 +390,13 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
     if let Some(d) = &st.deadend {
         lines.push(Line::from(Span::styled(d.clone(), Style::default().fg(Color::Red))));
     }
-    if let Some((_, vline)) = &st.verdict {
+    if let Some((header, vnotes)) = &st.verdict {
+        let mut line = header.clone();
+        if detail && !vnotes.is_empty() {
+            line.push_str(&format!(" \u{b7} {}", vnotes.join("; ")));
+        }
         lines.push(Line::from(Span::styled(
-            vline.clone(),
+            line,
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -465,6 +467,9 @@ pub async fn run(mut rx: EventRx, abort: tokio::task::AbortHandle) -> i32 {
                         }
                         (KeyCode::Char('v'), _) => {
                             state.single_pane = !state.single_pane;
+                        }
+                        (KeyCode::Char('d'), _) => {
+                            state.show_details = !state.show_details;
                         }
                         (KeyCode::Down, _) => {
                             if state.focus == Dir::Forward { state.scroll_fwd = state.scroll_fwd.saturating_add(1); }
@@ -598,7 +603,7 @@ fn draw(f: &mut ratatui::Frame, state: &TuiState) {
                 Span::styled(dir_block_title(dir, st, &dest_input, state.focus == dir), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
             ),
         };
-        let mut lines = hop_lines(st, true);
+        let mut lines = hop_lines(st, state.show_details);
         if let Some(s) = &st.status {
             lines.push(Line::from(Span::styled(
                 format!("… {s}"),
@@ -639,7 +644,7 @@ fn draw(f: &mut ratatui::Frame, state: &TuiState) {
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(
-            "  tab:focus  v:single-pane  ↑↓:scroll  q:quit",
+            "  tab:focus  v:single-pane  d:details  ↑↓:scroll  q:quit",
             Style::default().fg(Color::DarkGray),
         ),
         if let Some((_, saved, Some(path))) = &state.finished {
