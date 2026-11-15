@@ -63,7 +63,20 @@ fn dir_arrow(c: &C, dir: Dir) -> String {
     }
 }
 
+/// Buffered lines of one direction, flushed as a contiguous readable
+/// section: interleaved →/← lines were unreadable in log mode.
+#[derive(Default)]
+struct DirBuf {
+    lines: Vec<String>,
+    finished: bool,
+    printed: bool,
+}
+
 /// Consume events until the stream closes; returns a process exit code.
+///
+/// stdout carries clean per-direction sections (forward first, reverse
+/// after); live progress goes to stderr as a single rewritten line, and
+/// only when stderr is a terminal.
 pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
     let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     // conhost starts with VT processing off: enable it, or print plain text.
@@ -72,10 +85,53 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
     let c = C(color);
     let mut out = std::io::stdout().lock();
     let mut done: HashMap<Dir, bool> = HashMap::new();
-    let mut fwd_hops = 0usize;
-    let mut rev_hops = 0usize;
+    let mut fwd = DirBuf::default();
+    let mut rev = DirBuf::default();
+    let progress_tty = !verbose && std::io::stderr().is_terminal();
+
+    let flush = |fwd: &mut DirBuf, rev: &mut DirBuf, out: &mut std::io::StdoutLock| {
+        // Forward section prints as soon as it is complete; reverse waits
+        // for forward so the log reads in one fixed order.
+        if fwd.finished && !fwd.printed {
+            fwd.printed = true;
+            for l in &fwd.lines {
+                let _ = writeln!(out, "{l}");
+            }
+            let _ = out.flush();
+        }
+        if rev.finished && fwd.printed && !rev.printed {
+            rev.printed = true;
+            for l in &rev.lines {
+                let _ = writeln!(out, "{l}");
+            }
+            let _ = out.flush();
+        }
+    };
 
     while let Some(ev) = rx.recv().await {
+        let buffered_dir = match &ev {
+            Event::Hop { dir, .. }
+            | Event::ShortcutApplied { dir, .. }
+            | Event::Restarted { dir, .. }
+            | Event::DeadEnd { dir, .. }
+            | Event::Verdict { dir, .. }
+            | Event::Done { dir, .. } => Some(*dir),
+            _ => None,
+        };
+        // Live progress on stderr (rewritten single line).
+        if progress_tty {
+            match &ev {
+                Event::Hop { dir, n, .. } => {
+                    let arrow = dir_arrow(&c, *dir);
+                    eprint!("\r\x1b[K{arrow} hop {n}   ");
+                }
+                Event::Querying { dir, what, key, .. } => {
+                    let arrow = dir_arrow(&c, *dir);
+                    eprint!("\r\x1b[K{arrow} {what}: {}…   ", key.short());
+                }
+                _ => {}
+            }
+        }
         let line = match &ev {
             Event::Started {
                 dest_input,
@@ -150,11 +206,6 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                 trust,
                 trust_notes,
             } => {
-                if *dir == Dir::Forward {
-                    fwd_hops = fwd_hops.max(*n);
-                } else {
-                    rev_hops = rev_hops.max(*n);
-                }
                 let cached_mark = if *cached { c.dim(" ⛁") } else { String::new() };
                 let stale_mark = if *stale { c.yellow(" ~") } else { String::new() };
                 let rtt_s = rtt
@@ -281,22 +332,47 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                     c.bold("done"),
                     fmt_dur(*elapsed)
                 );
-                if fwd_hops > 0 || rev_hops > 0 {
-                    s.push_str(&format!("  (fwd {fwd_hops}"));
-                    if rev_hops > 0 {
-                        s.push_str(&format!(", rev {rev_hops}"));
-                    }
-                    s.push(')');
-                }
                 if let (Some(p), true) = (cache_path, *saved_nodes > 0) {
                     s.push_str(&c.dim(&format!("\n  cache: {saved_nodes} nodes → {p}")));
                 }
                 s
             }
         };
-        let _ = writeln!(out, "{line}");
-        let _ = out.flush();
+        match buffered_dir {
+            Some(dir) => {
+                let buf = match dir {
+                    Dir::Forward => &mut fwd,
+                    Dir::Reverse => &mut rev,
+                };
+                if matches!(&ev, Event::Done { .. }) {
+                    buf.finished = true;
+                }
+                buf.lines.push(line);
+                if progress_tty && buf.finished {
+                    eprint!("\r\x1b[K");
+                }
+                flush(&mut fwd, &mut rev, &mut out);
+            }
+            None => {
+                let _ = writeln!(out, "{line}");
+                let _ = out.flush();
+            }
+        }
     }
+    // Flush whatever is left (e.g. a deadline-killed walk).
+    flush(&mut fwd, &mut rev, &mut out);
+    for buf in [&mut fwd, &mut rev] {
+        if !buf.printed {
+            buf.printed = true;
+            for l in &buf.lines {
+                let _ = writeln!(out, "{l}");
+            }
+        }
+    }
+    if progress_tty {
+        eprint!("\r\x1b[K");
+    }
+    let _ = out.flush();
     if done.is_empty() {
         2
     } else if done.values().all(|v| *v) {
