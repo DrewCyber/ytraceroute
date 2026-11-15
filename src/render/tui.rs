@@ -7,7 +7,10 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{Event as CEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event as CEvent, KeyCode, KeyEvent, KeyEventKind, KeyboardEnhancementFlags,
+    KeyModifiers, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
@@ -520,13 +523,25 @@ pub async fn run(mut rx: EventRx, abort: tokio::task::AbortHandle) -> i32 {
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
     enable_raw_mode()?;
-    execute!(std::io::stdout(), EnterAlternateScreen)?;
+    // Kitty keyboard protocol: on terminals that support it, keys are
+    // reported by their physical (main-layout) code, so bindings keep
+    // working under any national layout. Terminals without support ignore
+    // this sequence and behave as before. No-op on Windows.
+    execute!(
+        std::io::stdout(),
+        EnterAlternateScreen,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    )?;
     let backend = CrosstermBackend::new(std::io::stdout());
     Ok(Terminal::new(backend)?)
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) {
-    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = execute!(
+        terminal.backend_mut(),
+        PopKeyboardEnhancementFlags,
+        LeaveAlternateScreen
+    );
     let _ = disable_raw_mode();
 }
 
