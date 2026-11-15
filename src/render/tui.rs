@@ -356,8 +356,11 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
                 format!(" {jump_pre}"),
                 Style::default().fg(Color::Yellow),
             ));
+            spans.push(Span::raw(rtt_rest));
+        } else {
+            // Keep the historical 8-column cell: space + 7-wide rtt.
+            spans.push(Span::raw(format!(" {rtt_rest}")));
         }
-        spans.push(Span::raw(rtt_rest));
         match h.trust {
             crate::routing::TrustLevel::High => {}
             crate::routing::TrustLevel::Medium => spans.push(Span::styled(
