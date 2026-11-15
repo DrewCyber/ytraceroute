@@ -109,6 +109,12 @@ pub fn subnet_for_key(key: &Key) -> Ipv6Addr {
     Ipv6Addr::from(snet)
 }
 
+/// The /64 prefix of an address inside a routed subnet (`3xx:…::5` →
+/// `3xx:…::`), comparable with `subnet_for_key`.
+pub fn subnet_prefix(addr: &Ipv6Addr) -> Ipv6Addr {
+    Ipv6Addr::from(u128::from(*addr) & (!0u128 << 64))
+}
+
 /// Length of the common prefix of two coordinate paths.
 pub fn common_prefix_len(a: &[u64], b: &[u64]) -> usize {
     let n = a.len().min(b.len());
@@ -156,6 +162,13 @@ mod tests {
             assert_eq!(addr_for_key(&key).to_string(), addr, "addr for {k}");
             assert_eq!(subnet_for_key(&key).to_string(), snet, "subnet for {k}");
         }
+    }
+
+    #[test]
+    fn host_inside_subnet_matches_key() {
+        let key = Key::from_hex("00000000000193f3eeb75460f85b1ba9b6f1718626aed6f8ef373ff78d5eb75c").unwrap();
+        assert_eq!(subnet_prefix(&"32f:6c0c:1148:ab9f::5".parse().unwrap()), subnet_for_key(&key));
+        assert_ne!(subnet_prefix(&"32f:6c0c:1148:ab9e::5".parse().unwrap()), subnet_for_key(&key));
     }
 
     #[test]
