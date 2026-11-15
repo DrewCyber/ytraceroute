@@ -81,11 +81,6 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           ART="ytraceroute-${VERSION}-${{ matrix.os-name }}-${{ matrix.arch }}"
           tar czf "${ART}.tar.gz" -C "target/${{ matrix.target }}/release" ytraceroute
-          if command -v sha256sum >/dev/null; then
-            sha256sum "${ART}.tar.gz" > "${ART}.tar.gz.sha256"
-          else
-            shasum -a 256 "${ART}.tar.gz" > "${ART}.tar.gz.sha256"
-          fi
 
       - name: Package (windows)
         if: runner.os == 'Windows'
@@ -94,14 +89,28 @@ jobs:
           $VERSION = $env:GITHUB_REF_NAME.Substring(1)
           $ART = "ytraceroute-$VERSION-${{ matrix.os-name }}-${{ matrix.arch }}"
           Compress-Archive -Path "target/${{ matrix.target }}/release/ytraceroute.exe" -DestinationPath "$ART.zip"
-          "$((Get-FileHash "$ART.zip" -Algorithm SHA256).Hash.ToLower())  $ART.zip" | Out-File -Encoding ascii "$ART.zip.sha256"
 
-      - name: Upload release assets
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ytraceroute-${{ matrix.os-name }}-${{ matrix.arch }}
+          path: ytraceroute-*
+          if-no-files-found: error
+
+  # A single job creates the release and attaches all assets; doing this
+  # from every matrix job used to append the generated notes once per job.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ytraceroute-*.tar.gz
-            ytraceroute-*.tar.gz.sha256
-            ytraceroute-*.zip
-            ytraceroute-*.zip.sha256
+          files: dist/*
           generate_release_notes: true
