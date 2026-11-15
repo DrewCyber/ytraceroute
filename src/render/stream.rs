@@ -74,6 +74,9 @@ fn kind_str(k: crate::routing::HopKind) -> &'static str {
 /// Consume events until the stream closes; returns a process exit code.
 pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
     let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    // conhost starts with VT processing off: enable it, or print plain text.
+    #[cfg(windows)]
+    let color = color && crossterm::ansi_support::supports_ansi();
     let c = C(color);
     let mut out = std::io::stdout().lock();
     let mut done: HashMap<Dir, bool> = HashMap::new();

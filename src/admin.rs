@@ -108,7 +108,7 @@ pub struct PeerEntry {
     pub port: u64,
     #[serde(rename = "cost", default)]
     pub cost: u64,
-    #[serde(rename = "latency", default)]
+    #[serde(rename = "latency", default, deserialize_with = "latency_ns")]
     pub latency_ns: Option<u64>,
     #[serde(rename = "up", default = "default_true")]
     pub up: bool,
@@ -120,6 +120,13 @@ pub struct PeerEntry {
 
 fn default_true() -> bool {
     true
+}
+
+/// yggdrasil-go sends integer nanoseconds (time.Duration), Yggdrasil-ng
+/// float milliseconds; serde_json keeps the two number kinds apart.
+fn latency_ns<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    let n: Option<serde_json::Number> = serde::Deserialize::deserialize(d)?;
+    Ok(n.and_then(|n| n.as_u64().or_else(|| n.as_f64().map(|ms| (ms * 1e6) as u64))))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -374,5 +381,18 @@ impl AdminClient {
                 Ok(())
             })();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_latency_go_and_ng() {
+        let p = |j: &str| serde_json::from_str::<PeerEntry>(j).unwrap().latency_ns;
+        assert_eq!(p(r#"{"key":"a","latency":96075800}"#), Some(96_075_800)); // go: ns
+        assert_eq!(p(r#"{"key":"a","latency":96.0758}"#), Some(96_075_800)); // ng: ms
+        assert_eq!(p(r#"{"key":"a"}"#), None);
     }
 }

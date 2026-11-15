@@ -16,7 +16,7 @@ use crate::model::{NodeCache, NodeData};
 use crate::opts::Opts;
 use crate::persist;
 use crate::walk::{walk, WalkCtx, WalkParams};
-use crate::ygg::{addr_for_key, common_prefix_len, subnet_for_key, Coords, Key};
+use crate::ygg::{addr_for_key, common_prefix_len, subnet_for_key, subnet_prefix, Coords, Key};
 
 pub struct App {
     pub opts: Opts,
@@ -396,7 +396,7 @@ impl App {
         candidates.dedup();
         candidates.into_iter().find(|k| {
             if is_subnet {
-                &subnet_for_key(k) == addr
+                subnet_for_key(k) == subnet_prefix(addr)
             } else {
                 &addr_for_key(k) == addr
             }
@@ -416,7 +416,7 @@ impl App {
             for s in sessions {
                 if let Ok(k) = Key::from_hex(&s.key) {
                     let m = if is_subnet {
-                        subnet_for_key(&k) == addr
+                        subnet_for_key(&k) == subnet_prefix(&addr)
                     } else {
                         addr_for_key(&k) == addr
                     };
