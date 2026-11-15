@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{Event as CEvent, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event as CEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
@@ -375,6 +375,8 @@ pub async fn run(mut rx: EventRx, abort: tokio::task::AbortHandle) -> i32 {
         loop {
             if crossterm::event::poll(Duration::from_millis(100))?
                 && let CEvent::Key(k) = crossterm::event::read()?
+                    // Windows also reports key releases; toggles must fire once.
+                    && k.kind == KeyEventKind::Press
                     && key_tx.blocking_send(k).is_err() {
                         break;
                     }
@@ -433,9 +435,8 @@ pub async fn run(mut rx: EventRx, abort: tokio::task::AbortHandle) -> i32 {
         }
     };
     restore_terminal(&mut terminal);
-    if !state.quit {
-        abort.abort();
-    }
+    // Stop walks still running after q/Ctrl-C; no-op once they finished.
+    abort.abort();
     exit_code
 }
 
