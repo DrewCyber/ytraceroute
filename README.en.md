@@ -2,6 +2,8 @@
 
 # ytraceroute
 
+[![100% vibecode](https://img.shields.io/badge/100%25%20vibecode-%E2%9C%A8-blueviolet?style=flat-square)]
+
 A predictive traceroute for Yggdrasil (v0.5.x) networks. Yggdrasil has no
 TTL/echo mechanism, so a real traceroute is impossible — **ytraceroute
 predicts** the packet's route by replaying ironwood's per-hop routing
@@ -15,6 +17,13 @@ own snapshot of the tree. "Shortcuts" are not a separate mechanism: any
 direct peer that is closer to the destination in the tree metric wins
 automatically; ytraceroute finds them and shows how much the shortcut
 shortened the route compared to the path through the root.
+
+![dual-pane TUI: forward and reverse routes traced in parallel](docs/screenshot.png)
+
+Demo: both routes building live — the speculative "via root" rows collapse
+as hops and shortcuts confirm:
+
+![demo](docs/demo.gif)
 
 ## Features
 

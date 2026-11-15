@@ -23,5 +23,8 @@ id_*
 # local agent tooling
 .zcode/
 
+# screen recordings (source material for docs/*.gif)
+*.mov
+
 # logs
 *.log
