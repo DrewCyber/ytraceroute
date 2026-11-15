@@ -154,6 +154,40 @@ impl App {
         // ---- Self coordinates (self-probe trick) ------------------------
         let self_coords = self.learn_self_coords(&events).await?;
 
+        // ---- Probe-priority hints ----------------------------------------
+        // The destination's own tree view (its ancestry + peers + their
+        // ancestries, keys only) plus our tree keys: at every hop these are
+        // the most likely next-hop candidates, so they get probed first and
+        // the bulk peer scan often never runs.
+        let hints: Arc<std::collections::HashSet<Key>> = Arc::new(
+            match self.admin.debug_remote_get_tree(&dest_key).await {
+                Ok(view) => {
+                    let mut set: std::collections::HashSet<Key> = view.into_iter().collect();
+                    set.extend(self.parent_of.keys().copied());
+                    set.extend(self.parent_of.values().copied());
+                    set.extend(self.cache.snapshot().keys());
+                    set
+                }
+                Err(e) => {
+                    let _ = events
+                        .send(Event::Warn {
+                            dir: None,
+                            msg: format!(
+                                "dest tree view unavailable ({}), falling back to full peer scans",
+                                e.root_cause()
+                            ),
+                        })
+                        .await;
+                    // Degrade to our tree keys + cache only.
+                    let mut set: std::collections::HashSet<Key> = Default::default();
+                    set.extend(self.parent_of.keys().copied());
+                    set.extend(self.parent_of.values().copied());
+                    set.extend(self.cache.snapshot().keys());
+                    set
+                }
+            },
+        );
+
         // ---- Destination coordinates + reachability ----------------------
         let dest_f = self
             .cache
@@ -201,12 +235,14 @@ impl App {
                     self_link_costs: self.self_link_costs.clone(),
                     prefetch: !opts.no_prefetch,
                     fetch_nodeinfo: opts.nodeinfo,
+                    exact: opts.exact,
                     relearn_budget: 1,
                 },
                 cache: self.cache.clone(),
                 admin: self.admin.clone(),
                 events: events.clone(),
                 cancel: cancel.clone(),
+                hints: hints.clone(),
             });
             handles.push(tokio::spawn(walk(ctx)));
         }
@@ -232,12 +268,14 @@ impl App {
                     self_link_costs: self.self_link_costs.clone(),
                     prefetch: !opts.no_prefetch,
                     fetch_nodeinfo: opts.nodeinfo,
+                    exact: opts.exact,
                     relearn_budget: 1,
                 },
                 cache: self.cache.clone(),
                 admin: self.admin.clone(),
                 events: events.clone(),
                 cancel: cancel.clone(),
+                hints: hints.clone(),
             });
             handles.push(tokio::spawn(walk(ctx)));
         }

@@ -59,6 +59,11 @@ pub struct Opts {
     #[arg(long)]
     pub no_prefetch: bool,
 
+    /// Always probe every peer at every hop (slower; hinted probing may
+    /// skip bulk peers after a candidate is found)
+    #[arg(long)]
+    pub exact: bool,
+
     /// Node data TTL for the on-disk cache, seconds
     #[arg(long, default_value_t = 90)]
     pub cache_ttl: u64,

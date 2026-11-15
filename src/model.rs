@@ -310,45 +310,48 @@ impl NodeCache {
         Ok(peers)
     }
 
-    /// Bulk coordinate learning. Sending any overlay packet to a node makes
-    /// the local node learn that node's path (bloom lookup -> pathNotify),
-    /// which then appears in `getPaths` — we do not need to wait for the
-    /// debug response itself. So: fire probes at every key we lack coords
-    /// for, wait a moment, harvest `getPaths` once. Returns how many of the
-    /// requested keys became known.
-    pub async fn fanout_learn_coords(&self, keys: &[Key]) -> usize {
-        let unknown: Vec<Key> = {
-            let now = now_ms();
-            let nodes = self.nodes.read().expect("node cache poisoned");
-            keys.iter()
-                .filter(|k| {
-                    nodes
-                        .get(*k)
-                        .and_then(|e| e.coords_at_ms)
-                        .map(|t| now.saturating_sub(t) > self.ttl_ms)
-                        .unwrap_or(true)
-                })
-                .copied()
-                .collect()
-        };
-        if unknown.is_empty() {
-            return 0;
-        }
+    /// Keys from `keys` we have no fresh coordinates for.
+    pub fn unknown_coords_keys(&self, keys: &[Key]) -> Vec<Key> {
+        let now = now_ms();
+        let nodes = self.nodes.read().expect("node cache poisoned");
+        keys.iter()
+            .filter(|k| {
+                nodes
+                    .get(*k)
+                    .and_then(|e| e.coords_at_ms)
+                    .map(|t| now.saturating_sub(t) > self.ttl_ms)
+                    .unwrap_or(true)
+            })
+            .copied()
+            .collect()
+    }
+
+    /// Fire-and-forget probes (paced chunks); the lookup side effect on the
+    /// local node is what matters, responses are abandoned.
+    pub fn fire_probes(&self, keys: &[Key]) {
         const CHUNK: usize = 64;
-        for chunk in unknown.chunks(CHUNK) {
-            for k in chunk {
-                self.admin.fire(
-                    "debug_remoteGetSelf",
-                    serde_json::json!({ "key": k.hex() }),
-                    Duration::from_millis(1500),
-                );
+        let keys = keys.to_vec();
+        let admin = self.admin.clone();
+        std::thread::spawn(move || {
+            for chunk in keys.chunks(CHUNK) {
+                for k in chunk {
+                    admin.fire(
+                        "debug_remoteGetSelf",
+                        serde_json::json!({ "key": k.hex() }),
+                        Duration::from_millis(1500),
+                    );
+                }
+                // Pacing between chunks to stay polite to the admin socket
+                // and the overlay; overlaps with the caller's harvest wait.
+                std::thread::sleep(Duration::from_millis(120));
             }
-            // Small pacing between chunks to be polite to the admin socket
-            // and the overlay (each fire is one connection + one lookup).
-            tokio::time::sleep(Duration::from_millis(150)).await;
-        }
-        // Give the lookups time to complete (2 overlay round trips), then
-        // harvest; retry briefly if coverage is still incomplete.
+        });
+    }
+
+    /// Give the triggered lookups time to land, then harvest `getPaths`
+    /// (with retries). Returns how many of `keys` became known.
+    pub async fn wait_and_harvest(&self, keys: &[Key]) -> usize {
+        let want: std::collections::HashSet<Key> = keys.iter().copied().collect();
         let mut learned = 0;
         for round in 0..3 {
             tokio::time::sleep(Duration::from_millis(if round == 0 {
@@ -360,11 +363,8 @@ impl NodeCache {
             if let Ok(paths) = self.admin.get_paths().await {
                 self.harvest_paths(&paths);
             }
-            learned = unknown
-                .iter()
-                .filter(|k| self.coords_fresh(k).is_some())
-                .count();
-            if learned == unknown.len() {
+            learned = want.iter().filter(|k| self.coords_fresh(k).is_some()).count();
+            if learned == want.len() {
                 break;
             }
         }

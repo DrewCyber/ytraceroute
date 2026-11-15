@@ -315,6 +315,31 @@ impl AdminClient {
         Ok(keys)
     }
 
+    /// Fetch the tree-view of a remote node: the KEYS in its `infos`
+    /// (its own ancestry + every peer + peers' ancestries). No parent/port
+    /// data remotely — keys only, same envelope as GetPeers.
+    pub async fn debug_remote_get_tree(&self, key: &Key) -> Result<Vec<Key>> {
+        let v = self
+            .request("debug_remoteGetTree", json!({ "key": key.hex() }))
+            .await?;
+        let inner = v
+            .as_object()
+            .and_then(|m| m.values().next())
+            .cloned()
+            .unwrap_or(Value::Null);
+        let keys = inner
+            .get("keys")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str())
+                    .filter_map(|s| Key::from_hex(s).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(keys)
+    }
+
     pub async fn get_node_info(&self, key: &Key) -> Result<Value> {
         self.request("getNodeInfo", json!({ "key": key.hex() }))
             .await

@@ -29,6 +29,9 @@ pub struct WalkParams {
     pub prefetch: bool,
     /// Fetch nodeinfo for each confirmed hop (--nodeinfo).
     pub fetch_nodeinfo: bool,
+    /// Never skip the bulk peer scan even when hinted probes already found
+    /// a candidate (--exact).
+    pub exact: bool,
     /// How many times the target coords may be re-learned mid-walk.
     pub relearn_budget: u32,
 }
@@ -52,6 +55,9 @@ pub struct WalkCtx {
     pub admin: Arc<AdminClient>,
     pub events: EventTx,
     pub cancel: CancellationToken,
+    /// Probe-priority hints: the destination's tree view (its ancestry and
+    /// peers) plus our own tree keys. Empty set degrades to a full scan.
+    pub hints: Arc<std::collections::HashSet<Key>>,
 }
 
 /// Fire-and-forget prefetch of the next hop's peer list.
@@ -254,37 +260,69 @@ pub async fn walk(ctx: Arc<WalkCtx>) {
         };
 
         // Coordinates of the peers: fire-and-forget probes make the local
-        // node learn everyone's path, then one getPaths harvests them all.
-        let known_before = peers
-            .iter()
-            .filter(|k| ctx.cache.get_node(k).and_then(|d| d.coords.clone()).is_some())
-            .count();
-        if known_before < peers.len() {
-            let _ = ctx
-                .events
-                .send(Event::Querying {
-                    dir: p.dir,
-                    what: format!(
-                        "coords: {}/{} known, learning the rest",
-                        known_before,
-                        peers.len()
-                    ),
-                    key: cur,
-                    detail: crate::render::fmt_coords(&cur_coords),
-                })
-                .await;
-            ctx.cache.fanout_learn_coords(&peers).await;
+        // node learn everyone's path, then getPaths harvests them all.
+        // Phase 1 probes only the hinted subset (destination's tree view +
+        // our tree keys); the bulk scan runs only if no candidate emerges.
+        let unknown = ctx.cache.unknown_coords_keys(&peers);
+        let mut skipped_bulk = false;
+        if !unknown.is_empty() {
+            let (prio, rest): (Vec<Key>, Vec<Key>) = unknown
+                .into_iter()
+                .partition(|k| ctx.hints.contains(k));
+            let eval = |resolved: &[(Key, Coords, u64)]| {
+                candidates(&cur_coords, &p.target_coords, resolved).1.is_empty()
+            };
+            if !prio.is_empty() {
+                let _ = ctx
+                    .events
+                    .send(Event::Querying {
+                        dir: p.dir,
+                        what: format!(
+                            "coords: {}/{} known, probing {} hinted",
+                            peers.len() - prio.len() - rest.len(),
+                            peers.len(),
+                            prio.len()
+                        ),
+                        key: cur,
+                        detail: crate::render::fmt_coords(&cur_coords),
+                    })
+                    .await;
+                ctx.cache.fire_probes(&prio);
+                ctx.cache.wait_and_harvest(&prio).await;
+            }
+            let resolved_now = resolved_peers(ctx.as_ref(), &peers);
+            if !rest.is_empty() && (prio.is_empty() || eval(&resolved_now) || p.exact) {
+                let _ = ctx
+                    .events
+                    .send(Event::Querying {
+                        dir: p.dir,
+                        what: format!("coords: full scan of {} unhinted peers", rest.len()),
+                        key: cur,
+                        detail: crate::render::fmt_coords(&cur_coords),
+                    })
+                    .await;
+                ctx.cache.fire_probes(&rest);
+                ctx.cache.wait_and_harvest(&rest).await;
+            } else if !rest.is_empty() {
+                skipped_bulk = true;
+                let _ = ctx
+                    .events
+                    .send(Event::Querying {
+                        dir: p.dir,
+                        what: format!(
+                            "coords: skipping {} unhinted peers (candidate found via hints)",
+                            rest.len()
+                        ),
+                        key: cur,
+                        detail: crate::render::fmt_coords(&cur_coords),
+                    })
+                    .await;
+            }
         }
-        let resolved: Vec<(Key, Coords, u64)> = peers
-            .iter()
-            .filter_map(|k| {
-                ctx.cache
-                    .get_node(k)
-                    .and_then(|d| d.coords.clone())
-                    .map(|c| (*k, c, link_cost(ctx.as_ref(), k)))
-            })
-            .collect();
-        if resolved.len() < peers.len() {
+        let resolved: Vec<(Key, Coords, u64)> = resolved_peers(ctx.as_ref(), &peers);
+        // Unknown peers only matter when they could have changed the
+        // outcome: dead lookups after a full scan, not a deliberate skip.
+        if resolved.len() < peers.len() && !skipped_bulk {
             let _ = ctx
                 .events
                 .send(Event::Warn {
@@ -472,8 +510,21 @@ fn restart_with(ctx: Arc<WalkCtx>, target_coords: Coords, hops: usize) {
         admin: ctx.admin.clone(),
         events: ctx.events.clone(),
         cancel: ctx.cancel.clone(),
+        hints: ctx.hints.clone(),
     });
     tokio::spawn(walk(ctx2));
+}
+
+fn resolved_peers(ctx: &WalkCtx, peers: &[Key]) -> Vec<(Key, Coords, u64)> {
+    peers
+        .iter()
+        .filter_map(|k| {
+            ctx.cache
+                .get_node(k)
+                .and_then(|d| d.coords.clone())
+                .map(|c| (*k, c, link_cost(ctx, k)))
+        })
+        .collect()
 }
 
 fn link_cost(ctx: &WalkCtx, key: &Key) -> u64 {
