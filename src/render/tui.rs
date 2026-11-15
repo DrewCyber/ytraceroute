@@ -353,7 +353,7 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
         ];
         if !jump_pre.is_empty() {
             spans.push(Span::styled(
-                jump_pre,
+                format!(" {jump_pre}"),
                 Style::default().fg(Color::Yellow),
             ));
         }
