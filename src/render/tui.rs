@@ -328,14 +328,17 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
         ]));
     }
     for h in &st.hops {
-        let rtt = h
+        // Distance change sits in the same column as the you/dest label;
+        // "jump" for shortcut hops is overlaid into the rtt cell's leading
+        // blanks so rows without it stay aligned.
+        let dist = format!("{}->{}", h.d_before, h.d_after);
+        let rtt_s = h
             .rtt
             .as_ref()
-            .map(|r| format!("{:>7}", fmt_dur(*r)))
-            .unwrap_or_else(|| "      -".into());
-        // Distance change sits in the same column as the you/dest label;
-        // "jump" marks a shortcut hop.
-        let dist = format!("{}->{}", h.d_before, h.d_after);
+            .map(|r| fmt_dur(*r))
+            .unwrap_or_else(|| "-".into());
+        let (jump_pre, rtt_rest) =
+            crate::render::jump_rtt_cell(h.kind == HopKind::Shortcut, &rtt_s);
         let mut spans = vec![
             Span::styled(
                 format!("{:>2} ", h.n),
@@ -348,13 +351,13 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
             ),
             Span::raw(format!(" {dist}")),
         ];
-        if h.kind == HopKind::Shortcut {
+        if !jump_pre.is_empty() {
             spans.push(Span::styled(
-                " jump",
+                jump_pre,
                 Style::default().fg(Color::Yellow),
             ));
         }
-        spans.push(Span::raw(format!(" {rtt}")));
+        spans.push(Span::raw(rtt_rest));
         match h.trust {
             crate::routing::TrustLevel::High => {}
             crate::routing::TrustLevel::Medium => spans.push(Span::styled(

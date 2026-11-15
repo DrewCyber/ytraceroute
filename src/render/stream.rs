@@ -155,16 +155,17 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                 } else {
                     rev_hops = rev_hops.max(*n);
                 }
-                let jump = match kind {
-                    crate::routing::HopKind::Shortcut => c.yellow(" jump").to_string(),
-                    _ => String::new(),
-                };
                 let cached_mark = if *cached { c.dim(" ⛁") } else { String::new() };
                 let stale_mark = if *stale { c.yellow(" ~") } else { String::new() };
-                let rtt = rtt
+                let rtt_s = rtt
                     .as_ref()
-                    .map(|r| format!("{:>6}", fmt_dur(*r)))
-                    .unwrap_or_else(|| "     -".to_string());
+                    .map(|r| fmt_dur(*r))
+                    .unwrap_or_else(|| "-".to_string());
+                let (jump_pre, rtt_rest) = crate::render::jump_rtt_cell(
+                    matches!(kind, crate::routing::HopKind::Shortcut),
+                    &rtt_s,
+                );
+                let rtt = format!("{}{}", c.yellow(&jump_pre), rtt_rest);
                 let trust_mark = match trust {
                     crate::routing::TrustLevel::High => String::new(),
                     crate::routing::TrustLevel::Medium => c.yellow(" ?").to_string(),
@@ -176,7 +177,7 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                     String::new()
                 };
                 format!(
-                    "{} {:>2}  {}  {}  {:<22} {d_before}->{d_after}{jump}  {rtt}{cached_mark}{stale_mark}{trust_mark}{trust_note}",
+                    "{} {:>2}  {}  {}  {:<22} {d_before}->{d_after} {rtt}{cached_mark}{stale_mark}{trust_mark}{trust_note}",
                     dir_arrow(&c, *dir),
                     n,
                     addr_for_key(key),
