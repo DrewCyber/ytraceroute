@@ -87,6 +87,68 @@ pub fn select_next(cands: &[Candidate]) -> Option<&Candidate> {
     best
 }
 
+/// Per-hop confidence of the predicted forwarding decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub enum TrustLevel {
+    /// The decision is effectively forced: delivery, or the unique closest
+    /// hop with no plausible alternatives and no blind spots.
+    High,
+    /// A plausible alternative existed (or peers are unknown): real link
+    /// costs could pick a different winner.
+    Medium,
+    /// The choice is a guess: heavy unknowns on top of an open hop.
+    Low,
+}
+
+/// Classify how trustworthy the chosen next hop is, given the full
+/// candidate list and the number of peers we could not learn coordinates
+/// for (unreachable probes plus deliberately skipped bulk in hinted mode).
+///
+/// Cost model reality: the chosen hop (dist d, assumed cost 1) loses to an
+/// alternative at dist da iff its real link is more than da/d times more
+/// expensive. A hop already at dist 1 is immune to unknown peers: nothing
+/// can be strictly closer except the destination itself, which is always
+/// probed first (it is in every hint set).
+pub fn hop_trust(
+    chosen: &Candidate,
+    cands: &[Candidate],
+    unknown: usize,
+) -> (TrustLevel, Vec<String>) {
+    let mut notes = Vec::new();
+    let mut level = TrustLevel::High;
+    let d = chosen.dist;
+    if d == 0 {
+        return (level, notes); // next hop is the destination itself
+    }
+    let d_alt = cands
+        .iter()
+        .filter(|c| c.key != chosen.key)
+        .map(|c| c.dist)
+        .min();
+    if let Some(da) = d_alt {
+        if da == d {
+            level = level.max(TrustLevel::Medium);
+            notes.push(format!("dist tie: {d_alt_tie} peers at dist {d}; real link costs decide",
+                d_alt_tie = cands.iter().filter(|c| c.dist == d).count()));
+        } else if da / d < 4 {
+            // Flip needs the chosen link to be only da/d times slower:
+            // plausible for adjacent distances.
+            level = level.max(TrustLevel::Medium);
+            notes.push(format!("cost-sensitive: dist {d} vs dist {da} alternatives"));
+        }
+        // da/d >= 4: the margin survives any plausible cost ratio.
+    }
+    if d > 1 && unknown > 0 {
+        let heavy = unknown > 32;
+        let lvl = if heavy { TrustLevel::Low } else { TrustLevel::Medium };
+        level = level.max(lvl);
+        notes.push(format!(
+            "{unknown} peers with unknown coords could be closer"
+        ));
+    }
+    (level, notes)
+}
+
 /// Direction classification of a hop relative to the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum HopKind {
@@ -182,6 +244,54 @@ mod tests {
         assert_eq!(d_self, 0);
         assert!(cands.is_empty());
         assert!(select_next(&cands).is_none());
+    }
+
+    #[test]
+    fn trust_levels() {
+        use super::hop_trust;
+        // Delivery: dist 0 is always High.
+        let chosen = Candidate { key: key(1), cost: 1, dist: 0 };
+        assert_eq!(hop_trust(&chosen, &[], 99).0, TrustLevel::High);
+
+        // Unique closest hop at dist 1: immune to unknowns.
+        let chosen = Candidate { key: key(1), cost: 1, dist: 1 };
+        let (lvl, notes) = hop_trust(&chosen, &[], 200);
+        assert_eq!(lvl, TrustLevel::High);
+        assert!(notes.is_empty());
+
+        // Dist tie: costs decide -> Medium.
+        let cands = vec![
+            Candidate { key: key(1), cost: 1, dist: 2 },
+            Candidate { key: key(2), cost: 1, dist: 2 },
+        ];
+        let (lvl, notes) = hop_trust(&cands[0], &cands, 0);
+        assert_eq!(lvl, TrustLevel::Medium);
+        assert!(notes[0].starts_with("dist tie"));
+
+        // Adjacent distances: cost-sensitive -> Medium.
+        let cands = vec![
+            Candidate { key: key(1), cost: 1, dist: 2 },
+            Candidate { key: key(2), cost: 1, dist: 3 },
+        ];
+        let (lvl, notes) = hop_trust(&cands[0], &cands, 0);
+        assert_eq!(lvl, TrustLevel::Medium);
+        assert!(notes[0].starts_with("cost-sensitive"));
+
+        // Wide margin: unique-winner semantics -> High.
+        let cands = vec![
+            Candidate { key: key(1), cost: 1, dist: 1 },
+            Candidate { key: key(2), cost: 1, dist: 5 },
+        ];
+        assert_eq!(hop_trust(&cands[0], &cands, 0).0, TrustLevel::High);
+
+        // Open hop (dist >= 2) with a few unknown peers -> Medium.
+        let chosen = Candidate { key: key(1), cost: 1, dist: 2 };
+        let (lvl, notes) = hop_trust(&chosen, &[], 5);
+        assert_eq!(lvl, TrustLevel::Medium);
+        assert!(notes[0].contains("unknown"));
+
+        // Heavy unknowns on an open hop -> Low.
+        assert_eq!(hop_trust(&chosen, &[], 64).0, TrustLevel::Low);
     }
 
     #[test]

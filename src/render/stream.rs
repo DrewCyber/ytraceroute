@@ -155,6 +155,8 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                 rtt,
                 stale,
                 cached,
+                trust,
+                trust_notes,
             } => {
                 if *dir == Dir::Forward {
                     fwd_hops = fwd_hops.max(*n);
@@ -171,8 +173,18 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                     .as_ref()
                     .map(|r| format!("{:>6}", fmt_dur(*r)))
                     .unwrap_or_else(|| "     -".to_string());
+                let trust_mark = match trust {
+                    crate::routing::TrustLevel::High => String::new(),
+                    crate::routing::TrustLevel::Medium => c.yellow(" ?").to_string(),
+                    crate::routing::TrustLevel::Low => c.red(" \u{2020}").to_string(),
+                };
+                let trust_note = if verbose && !trust_notes.is_empty() {
+                    c.dim(&format!("  \u{b7} {}", trust_notes.join("; ")))
+                } else {
+                    String::new()
+                };
                 format!(
-                    "{} {:>2}  {}  {}  {:<18} {:<8} d {d_before}->{d_after}  {rtt}{cached_mark}{stale_mark}",
+                    "{} {:>2}  {}  {}  {:<18} {:<8} d {d_before}->{d_after}  {rtt}{cached_mark}{stale_mark}{trust_mark}{trust_note}",
                     dir_arrow(&c, *dir),
                     n,
                     addr_for_key(key),
@@ -205,6 +217,36 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                 dir_arrow(&c, *dir),
                 c.red(&format!("✗ dead end at {}: {msg}", short(at)))
             ),
+            Event::Verdict {
+                dir,
+                level,
+                high,
+                medium,
+                low,
+                delivered,
+                notes,
+            } => {
+                let (word, col) = match level {
+                    crate::routing::TrustLevel::High => ("high", c.green("high")),
+                    crate::routing::TrustLevel::Medium => ("medium", c.yellow("medium")),
+                    crate::routing::TrustLevel::Low => ("low", c.red("low")),
+                };
+                let _ = word;
+                let total = high + medium + low;
+                let mut line = format!(
+                    "{} {} route confidence: {} \u{b7} {total} hops (high {high}, medium {medium}, low {low})",
+                    dir_arrow(&c, *dir),
+                    dir.label(),
+                    col,
+                );
+                if !*delivered {
+                    line.push_str(&c.dim(" \u{b7} incomplete"));
+                }
+                if !notes.is_empty() {
+                    line.push_str(&c.dim(&format!(" \u{b7} {}", notes.join("; "))));
+                }
+                line
+            }
             Event::Done {
                 dir,
                 hops,

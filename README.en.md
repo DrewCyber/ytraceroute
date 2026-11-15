@@ -108,9 +108,15 @@ $ ytraceroute -e tcp://127.0.0.1:9001 308:62:45:62::
    destination's coordinates collide with another node, the target is
    re-learned (once) and the walk continues.
 
-Link costs for our own links come from `getPeers` (ms); remote link costs
-are unknowable and default to the minimum (1 ms) — with equal costs the
-decision falls to treespace distance alone, exactly as in the real routing.
+Link costs for our own links come from `getPeers` (ms) and only affect
+the first hop; remote link costs are unknowable and default to the minimum
+(1 ms) — with equal costs the decision falls to treespace distance.
+
+**Confidence markers**: every hop is annotated — `?` (alternatives with
+nearby dist existed, or unknown peers — real link costs decide) and `†`
+(the choice was made blind, many unknown peers). A hop landing at dist 1,
+or the delivery hop, is unmarked: nothing can be closer. Each direction
+ends with an aggregate `route confidence: high/medium/low` plus reasons.
 
 ## Limitations
 

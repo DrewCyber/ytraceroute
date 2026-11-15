@@ -33,6 +33,8 @@ struct HopRow {
     d_after: u64,
     rtt: Option<Duration>,
     nodeinfo: Option<(String, String)>,
+    trust: crate::routing::TrustLevel,
+    trust_notes: Vec<String>,
 }
 
 #[derive(Default)]
@@ -44,6 +46,7 @@ struct DirState {
     notes: Vec<String>,
     deadend: Option<String>,
     done: Option<(usize, bool, Duration)>,
+    verdict: Option<(crate::routing::TrustLevel, String)>,
     status: Option<String>,
     target_coords: Option<Coords>,
 }
@@ -58,6 +61,8 @@ impl DirState {
             d_before,
             d_after,
             rtt,
+            trust,
+            trust_notes,
             ..
         } = ev
         {
@@ -70,6 +75,8 @@ impl DirState {
                 d_after: *d_after,
                 rtt: *rtt,
                 nodeinfo: None,
+                trust: *trust,
+                trust_notes: trust_notes.clone(),
             });
             // Everything the shortcut jumped over is no longer plausible.
             if let Some(t) = &self.target_coords {
@@ -177,6 +184,24 @@ impl TuiState {
             }
             Event::DeadEnd { dir, at, msg, .. } => {
                 self.dir_mut(*dir).deadend = Some(format!("✗ dead end at {}: {msg}", at.short()));
+            }
+            Event::Verdict {
+                dir,
+                level,
+                high,
+                medium,
+                low,
+                notes,
+                ..
+            } => {
+                let total = high + medium + low;
+                let mut line = format!(
+                    "\u{2248} route confidence: {level:?} \u{b7} {total} hops (high {high}, medium {medium}, low {low})"
+                );
+                if !notes.is_empty() {
+                    line.push_str(&format!(" \u{b7} {}", notes.join("; ")));
+                }
+                self.dir_mut(*dir).verdict = Some((*level, line));
             }
             Event::Done {
                 dir,
@@ -324,6 +349,23 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
             Span::styled(format!("  {:<8}", kl), Style::default().fg(kc)),
             Span::raw(format!("d {}→{}  {}", h.d_before, h.d_after, rtt)),
         ];
+        match h.trust {
+            crate::routing::TrustLevel::High => {}
+            crate::routing::TrustLevel::Medium => spans.push(Span::styled(
+                " ?",
+                Style::default().fg(Color::Yellow),
+            )),
+            crate::routing::TrustLevel::Low => spans.push(Span::styled(
+                " \u{2020}",
+                Style::default().fg(Color::Red),
+            )),
+        }
+        if !h.trust_notes.is_empty() {
+            spans.push(Span::styled(
+                format!(" \u{b7} {}", h.trust_notes.join("; ")),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
         if let Some((bn, bv)) = &h.nodeinfo {
             spans.push(Span::styled(format!("  ℹ {bn} {bv}"), Style::default().fg(Color::DarkGray)));
         }
@@ -349,6 +391,12 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
     }
     if let Some(d) = &st.deadend {
         lines.push(Line::from(Span::styled(d.clone(), Style::default().fg(Color::Red))));
+    }
+    if let Some((_, vline)) = &st.verdict {
+        lines.push(Line::from(Span::styled(
+            vline.clone(),
+            Style::default().fg(Color::DarkGray),
+        )));
     }
     if let Some((hops, delivered, elapsed)) = &st.done {
         let (mark, c) = if *delivered {

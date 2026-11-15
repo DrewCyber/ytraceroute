@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::admin::AdminClient;
 use crate::events::{Dir, Event, EventTx};
 use crate::model::NodeCache;
-use crate::routing::{candidates, classify, select_next};
+use crate::routing::{candidates, classify, hop_trust, select_next, TrustLevel};
 use crate::ygg::{tree_dist, Coords, Key};
 
 #[derive(Clone)]
@@ -74,9 +74,11 @@ pub async fn walk(ctx: Arc<WalkCtx>) {
     let mut cur = p.start;
     let mut watermark = u64::MAX;
     let mut n: usize = 0;
+    let mut trust = TrustTally::default();
 
     loop {
         if ctx.cancel.is_cancelled() || Instant::now() >= p.deadline {
+            emit_verdict(&ctx, &trust, false).await;
             let _ = ctx
                 .events
                 .send(Event::DeadEnd {
@@ -118,6 +120,7 @@ pub async fn walk(ctx: Arc<WalkCtx>) {
         let d = tree_dist(&cur_coords, &p.target_coords);
         if d == 0 {
             if cur == p.target {
+                emit_verdict(&ctx, &trust, true).await;
                 let _ = ctx
                     .events
                     .send(Event::Done {
@@ -290,7 +293,7 @@ pub async fn walk(ctx: Arc<WalkCtx>) {
                 ctx.cache.fire_probes(&prio);
                 ctx.cache.wait_and_harvest(&prio).await;
             }
-            let resolved_now = resolved_peers(ctx.as_ref(), &peers);
+            let resolved_now = resolved_peers(ctx.as_ref(), &cur, &peers);
             if !rest.is_empty() && (prio.is_empty() || eval(&resolved_now) || p.exact) {
                 let _ = ctx
                     .events
@@ -319,7 +322,7 @@ pub async fn walk(ctx: Arc<WalkCtx>) {
                     .await;
             }
         }
-        let resolved: Vec<(Key, Coords, u64)> = resolved_peers(ctx.as_ref(), &peers);
+        let resolved: Vec<(Key, Coords, u64)> = resolved_peers(ctx.as_ref(), &cur, &peers);
         // Unknown peers only matter when they could have changed the
         // outcome: dead lookups after a full scan, not a deliberate skip.
         if resolved.len() < peers.len() && !skipped_bulk {
@@ -405,6 +408,9 @@ pub async fn walk(ctx: Arc<WalkCtx>) {
             .unwrap_or_default();
         let kind = classify(&cur_coords, &next_coords);
         let node = ctx.cache.get_node(&next.key);
+        let unknown_peers = peers.len() - resolved.len();
+        let hop_trust = hop_trust(next, &cands, unknown_peers);
+        trust.record(hop_trust.0, &hop_trust.1);
         let cached = node
             .as_ref()
             .and_then(|d| d.coords_age_ms(crate::model::now_ms()))
@@ -431,6 +437,8 @@ pub async fn walk(ctx: Arc<WalkCtx>) {
                 rtt: node.as_ref().and_then(|d| d.rtt),
                 stale: false,
                 cached,
+                trust: hop_trust.0,
+                trust_notes: hop_trust.1,
             })
             .await;
         let skipped: usize = skipped as usize;
@@ -484,6 +492,7 @@ pub async fn walk(ctx: Arc<WalkCtx>) {
         }
     }
 
+    emit_verdict(&ctx, &trust, false).await;
     let _ = ctx
         .events
         .send(Event::Done {
@@ -529,25 +538,95 @@ fn restart_with(ctx: Arc<WalkCtx>, target_coords: Coords, hops: usize) {
     });
 }
 
-fn resolved_peers(ctx: &WalkCtx, peers: &[Key]) -> Vec<(Key, Coords, u64)> {
+fn resolved_peers(ctx: &WalkCtx, cur: &Key, peers: &[Key]) -> Vec<(Key, Coords, u64)> {
     peers
         .iter()
         .filter_map(|k| {
             ctx.cache
                 .get_node(k)
                 .and_then(|d| d.coords.clone())
-                .map(|c| (*k, c, link_cost(ctx, k)))
+                .map(|c| (*k, c, link_cost(ctx, cur, k)))
         })
         .collect()
 }
 
-fn link_cost(ctx: &WalkCtx, key: &Key) -> u64 {
-    // Only our own link costs are measurable; remote links use the minimum
-    // (1 ms), which makes ties resolve on treespace distance alone.
-    ctx.params
-        .self_link_costs
-        .get(key)
-        .copied()
-        .unwrap_or(1)
-        .max(1)
+fn link_cost(ctx: &WalkCtx, cur: &Key, key: &Key) -> u64 {
+    // Our own link costs are only meaningful for decisions made BY our
+    // node (hop 1). When a remote node X decides, its cost to the
+    // candidate is unknowable and must be the minimum (1 ms): applying OUR
+    // latency to a shared peer penalized candidates that merely happen to
+    // also peer us.
+    if cur == &ctx.params.self_key {
+        ctx.params
+            .self_link_costs
+            .get(key)
+            .copied()
+            .unwrap_or(1)
+            .max(1)
+    } else {
+        1
+    }
+}
+
+/// Running per-walk confidence tally.
+#[derive(Default)]
+struct TrustTally {
+    high: usize,
+    medium: usize,
+    low: usize,
+    notes: Vec<String>,
+}
+
+impl TrustTally {
+    fn record(&mut self, level: TrustLevel, notes: &[String]) {
+        match level {
+            TrustLevel::High => self.high += 1,
+            TrustLevel::Medium => self.medium += 1,
+            TrustLevel::Low => self.low += 1,
+        }
+        for n in notes {
+            // Keep the category (text before ':' or '(') for aggregation.
+            let cat = n.split([':', '(']).next().unwrap_or(n).trim();
+            self.notes.push(cat.to_string());
+        }
+    }
+
+    fn level(&self) -> TrustLevel {
+        if self.low > 0 {
+            TrustLevel::Low
+        } else if self.medium > 0 {
+            TrustLevel::Medium
+        } else {
+            TrustLevel::High
+        }
+    }
+
+    fn summarized_notes(&self) -> Vec<String> {
+        let mut counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for n in &self.notes {
+            *counts.entry(n.as_str()).or_default() += 1;
+        }
+        let mut v: Vec<String> = counts
+            .into_iter()
+            .map(|(k, c)| if c > 1 { format!("{k} ×{c}") } else { k.to_string() })
+            .collect();
+        v.sort();
+        v
+    }
+}
+
+async fn emit_verdict(ctx: &WalkCtx, trust: &TrustTally, delivered: bool) {
+    let _ = ctx
+        .events
+        .send(Event::Verdict {
+            dir: ctx.params.dir,
+            level: trust.level(),
+            high: trust.high,
+            medium: trust.medium,
+            low: trust.low,
+            delivered,
+            notes: trust.summarized_notes(),
+        })
+        .await;
 }

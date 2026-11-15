@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::sync::mpsc;
 
-use crate::routing::HopKind;
+use crate::routing::{HopKind, TrustLevel};
 use crate::ygg::{Coords, Key};
 
 /// Serialize a Duration as whole milliseconds (JSON friendliness).
@@ -97,6 +97,19 @@ pub enum Event {
         rtt: Option<Duration>,
         stale: bool,
         cached: bool,
+        trust: TrustLevel,
+        trust_notes: Vec<String>,
+    },
+    /// Aggregate confidence of one direction's route (emitted right
+    /// before its Done event).
+    Verdict {
+        dir: Dir,
+        level: TrustLevel,
+        high: usize,
+        medium: usize,
+        low: usize,
+        delivered: bool,
+        notes: Vec<String>,
     },
     /// A confirmed hop jumped ahead of the tree route (shortcut).
     ShortcutApplied {
