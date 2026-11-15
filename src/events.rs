@@ -106,6 +106,12 @@ pub enum Event {
         from_d: u64,
         to_d: u64,
     },
+    /// The target coordinates changed mid-walk: the direction restarts from
+    /// its origin; previously shown hops are superseded.
+    Restarted {
+        dir: Dir,
+        msg: String,
+    },
     /// Non-fatal issue.
     Warn {
         dir: Option<Dir>,

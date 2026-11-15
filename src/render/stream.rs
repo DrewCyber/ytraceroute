@@ -194,6 +194,11 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                     "⚡ hop {at_hop}: shortcut, skipped {skipped} tree hops (d {from_d}→{to_d})"
                 ))
             ),
+            Event::Restarted { dir, msg } => format!(
+                "{} {}",
+                dir_arrow(&c, *dir),
+                c.cyan(&format!("↻ {msg}"))
+            ),
             Event::Warn { msg, .. } => format!("{} {}", c.yellow("!"), c.dim(msg)),
             Event::DeadEnd { dir, at, msg, .. } => format!(
                 "{} {}",

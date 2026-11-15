@@ -159,6 +159,17 @@ impl TuiState {
             Event::Querying { dir, what, key, .. } => {
                 self.dir_mut(*dir).status = Some(format!("{what}: {}", key.short()));
             }
+            Event::Restarted { dir, msg } => {
+                // The old rows were computed toward stale target coords:
+                // drop them, the restarted walk re-emits fresh hops.
+                let st = self.dir_mut(*dir);
+                st.hops.clear();
+                st.spec.clear();
+                st.deadend = None;
+                st.done = None;
+                st.notes.clear();
+                st.notes.push(format!("↻ {msg}"));
+            }
             Event::Warn { msg, .. } => {
                 if self.warnings.len() < 5 {
                     self.warnings.push(msg.clone());

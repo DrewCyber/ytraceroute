@@ -496,8 +496,12 @@ pub async fn walk(ctx: Arc<WalkCtx>) {
 }
 
 /// Restart the walk with re-learned target coordinates (target moved).
-/// Spawned rather than awaited to keep `walk` non-recursive.
+/// Kept non-recursive by double spawning: this helper spawns a tiny task
+/// that first awaits the Restarted event (so renderers drop superseded
+/// rows) and only then spawns the fresh walk.
 fn restart_with(ctx: Arc<WalkCtx>, target_coords: Coords, hops: usize) {
+    let dir = ctx.params.dir;
+    let events = ctx.events.clone();
     let mut params = WalkParams {
         target_coords,
         ..ctx.params.clone()
@@ -512,7 +516,17 @@ fn restart_with(ctx: Arc<WalkCtx>, target_coords: Coords, hops: usize) {
         cancel: ctx.cancel.clone(),
         hints: ctx.hints.clone(),
     });
-    tokio::spawn(walk(ctx2));
+    tokio::spawn(async move {
+        let _ = events
+            .send(Event::Restarted {
+                dir,
+                msg: format!(
+                    "target coordinates changed; re-tracing (previous {hops} hops superseded)"
+                ),
+            })
+            .await;
+        tokio::spawn(walk(ctx2));
+    });
 }
 
 fn resolved_peers(ctx: &WalkCtx, peers: &[Key]) -> Vec<(Key, Coords, u64)> {
