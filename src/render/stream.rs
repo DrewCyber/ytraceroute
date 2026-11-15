@@ -63,14 +63,6 @@ fn dir_arrow(c: &C, dir: Dir) -> String {
     }
 }
 
-fn kind_str(k: crate::routing::HopKind) -> &'static str {
-    match k {
-        crate::routing::HopKind::Up => "up",
-        crate::routing::HopKind::Down => "down",
-        crate::routing::HopKind::Shortcut => "shortcut",
-    }
-}
-
 /// Consume events until the stream closes; returns a process exit code.
 pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
     let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
@@ -163,9 +155,9 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                 } else {
                     rev_hops = rev_hops.max(*n);
                 }
-                let kstr = match kind {
-                    crate::routing::HopKind::Shortcut => c.yellow("shortcut"),
-                    _ => c.dim(kind_str(*kind)),
+                let jump = match kind {
+                    crate::routing::HopKind::Shortcut => c.yellow(" jump").to_string(),
+                    _ => String::new(),
                 };
                 let cached_mark = if *cached { c.dim(" ⛁") } else { String::new() };
                 let stale_mark = if *stale { c.yellow(" ~") } else { String::new() };
@@ -184,13 +176,12 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                     String::new()
                 };
                 format!(
-                    "{} {:>2}  {}  {}  {:<18} {:<8} d {d_before}->{d_after}  {rtt}{cached_mark}{stale_mark}{trust_mark}{trust_note}",
+                    "{} {:>2}  {}  {}  {:<18} {d_before}->{d_after}{jump}  {rtt}{cached_mark}{stale_mark}{trust_mark}{trust_note}",
                     dir_arrow(&c, *dir),
                     n,
                     addr_for_key(key),
                     c.dim(&short(key)),
                     c.dim(&fmt_coords(coords)),
-                    kstr,
                 )
             }
             Event::ShortcutApplied {
@@ -203,7 +194,7 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                 "{} {}",
                 dir_arrow(&c, *dir),
                 c.yellow(&format!(
-                    "⚡ hop {at_hop}: shortcut, skipped {skipped} tree hops (d {from_d}→{to_d})"
+                    "⚡ hop {at_hop}: jump, skipped {skipped} tree hops ({from_d}→{to_d})"
                 ))
             ),
             Event::Restarted { dir, msg } => format!(

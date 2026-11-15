@@ -162,7 +162,7 @@ impl TuiState {
                 to_d,
             } => {
                 self.dir_mut(*dir).notes.push(format!(
-                    "⚡ hop {at_hop}: shortcut, skipped {skipped} tree hops (d {from_d}→{to_d})"
+                    "⚡ hop {at_hop}: jump, skipped {skipped} tree hops ({from_d}→{to_d})"
                 ));
             }
             Event::Querying { dir, what, key, .. } => {
@@ -248,14 +248,6 @@ impl TuiState {
     }
 }
 
-fn kind_label(k: HopKind) -> (&'static str, Color) {
-    match k {
-        HopKind::Up => ("up", Color::Blue),
-        HopKind::Down => ("down", Color::Green),
-        HopKind::Shortcut => ("shortcut", Color::Yellow),
-    }
-}
-
 /// Per-depth column widths so all coordinate paths in a pane line up:
 /// shared prefixes form a visible vertical spine.
 fn coord_widths(rows: &[&Coords]) -> Vec<usize> {
@@ -324,16 +316,18 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
                 fmt_coords_cols(c, &widths),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(format!("  {label}"), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!(" {label}"), Style::default().fg(Color::DarkGray)),
         ]));
     }
     for h in &st.hops {
-        let (kl, kc) = kind_label(h.kind);
         let rtt = h
             .rtt
             .as_ref()
             .map(|r| format!("{:>7}", fmt_dur(*r)))
             .unwrap_or_else(|| "      -".into());
+        // Distance change sits in the same column as the you/dest label;
+        // "jump" marks a shortcut hop.
+        let dist = format!("{}->{}", h.d_before, h.d_after);
         let mut spans = vec![
             Span::styled(
                 format!("{:>2} ", h.n),
@@ -344,9 +338,15 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
                 fmt_coords_cols(&h.coords, &widths),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(format!("  {:<8}", kl), Style::default().fg(kc)),
-            Span::raw(format!("d {}→{}  {}", h.d_before, h.d_after, rtt)),
+            Span::raw(format!(" {dist}")),
         ];
+        if h.kind == HopKind::Shortcut {
+            spans.push(Span::styled(
+                " jump",
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+        spans.push(Span::raw(format!(" {rtt}")));
         match h.trust {
             crate::routing::TrustLevel::High => {}
             crate::routing::TrustLevel::Medium => spans.push(Span::styled(
