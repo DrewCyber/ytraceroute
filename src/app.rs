@@ -347,12 +347,14 @@ impl App {
     }
 
     /// Resolve the destination input: hex key, "self", or an IPv6 address
-    /// (node `02..` or routed subnet `03..`). Address inputs are matched
-    /// against every key we know (tree/paths/peers/cache); if that fails we
-    /// send a UDP packet through the overlay (the "ping6 precheck") and
-    /// match the session that appears in getSessions.
+    /// (node `02..` or routed subnet `03..`), optionally in socket-style
+    /// brackets ("[200:..:a]" — and "[200:..:a]:port", port ignored).
+    /// Address inputs are matched against every key we know
+    /// (tree/paths/peers/cache); if that fails we send a UDP packet through
+    /// the overlay (the "ping6 precheck") and match the session that appears
+    /// in getSessions.
     async fn resolve_dest(&self, input: &str, events: &EventTx) -> Result<Key> {
-        let t = input.trim();
+        let t = strip_brackets(input.trim());
         if t.eq_ignore_ascii_case("self") || t.eq_ignore_ascii_case("me") {
             return Ok(self.self_key);
         }
@@ -521,5 +523,28 @@ impl App {
             .into_iter()
             .find(|(_, d)| d.coords.as_deref() == Some(coords.as_slice()))
             .map(|(k, _)| k)
+    }
+}
+
+/// "[200:..:a]" / "[200:..:a]:port" -> "200:..:a"; anything else unchanged.
+fn strip_brackets(s: &str) -> &str {
+    s.strip_prefix('[')
+        .and_then(|rest| rest.split(']').next())
+        .unwrap_or(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_brackets;
+
+    #[test]
+    fn bracketed_addresses() {
+        assert_eq!(strip_brackets("[200:832f:2e56:91a6:678e:aaaf:80bf:4a8a]"), "200:832f:2e56:91a6:678e:aaaf:80bf:4a8a");
+        assert_eq!(strip_brackets("[200:832f::1]:9001"), "200:832f::1");
+        assert_eq!(strip_brackets("200:832f::1"), "200:832f::1");
+        assert_eq!(strip_brackets("00ffceffdd7fced3"), "00ffceffdd7fced3");
+        assert_eq!(strip_brackets("self"), "self");
+        assert_eq!(strip_brackets("["), "");
+        assert_eq!(strip_brackets("200::1]"), "200::1]");
     }
 }
