@@ -291,6 +291,14 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
         all.push(&srow.coords);
     }
     let widths = coord_widths(&all);
+    // The coords STRING length varies (short paths end early); pad the
+    // whole field so the distance column after it lines up vertically.
+    let coords_w = all
+        .iter()
+        .map(|c| fmt_coords_cols(c, &widths).len())
+        .max()
+        .unwrap_or(2)
+        .max(2);
 
     // Fixed address column so the coords start at the same offset on every
     // row regardless of how long each IPv6 address happens to be.
@@ -313,7 +321,7 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
             ),
             Span::raw(format!("{addr:<addr_w$}")),
             Span::styled(
-                fmt_coords_cols(c, &widths),
+                format!("{:<coords_w$}", fmt_coords_cols(c, &widths)),
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled(format!(" {label}"), Style::default().fg(Color::DarkGray)),
@@ -335,7 +343,7 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
             ),
             Span::raw(format!("{:<addr_w$}", addr_for_key(&h.key))),
             Span::styled(
-                fmt_coords_cols(&h.coords, &widths),
+                format!("{:<coords_w$}", fmt_coords_cols(&h.coords, &widths)),
                 Style::default().fg(Color::DarkGray),
             ),
             Span::raw(format!(" {dist}")),
@@ -382,7 +390,7 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
             Span::styled(format!("{:>2} ", "~"), Style::default().fg(Color::DarkGray)),
             Span::raw(format!("{:addr_w$}", "")),
             Span::styled(
-                fmt_coords_cols(&srow.coords, &widths),
+                format!("{:<coords_w$}", fmt_coords_cols(&srow.coords, &widths)),
                 Style::default().fg(Color::DarkGray),
             ),
         ]));

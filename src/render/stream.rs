@@ -176,7 +176,7 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                     String::new()
                 };
                 format!(
-                    "{} {:>2}  {}  {}  {:<18} {d_before}->{d_after}{jump}  {rtt}{cached_mark}{stale_mark}{trust_mark}{trust_note}",
+                    "{} {:>2}  {}  {}  {:<22} {d_before}->{d_after}{jump}  {rtt}{cached_mark}{stale_mark}{trust_mark}{trust_note}",
                     dir_arrow(&c, *dir),
                     n,
                     addr_for_key(key),
