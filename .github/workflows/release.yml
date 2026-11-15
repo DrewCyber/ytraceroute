@@ -9,19 +9,48 @@ permissions:
   contents: write
 
 jobs:
-  build-linux:
-    name: linux ${{ matrix.arch }}
-    runs-on: ubuntu-latest
+  build:
+    name: ${{ matrix.os-name }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
+          # Linux: static musl binaries via cargo-zigbuild
+          - os: ubuntu-latest
+            os-name: linux
+            target: x86_64-unknown-linux-musl
             arch: x86_64
-          - target: aarch64-unknown-linux-musl
+            zig: true
+          - os: ubuntu-latest
+            os-name: linux
+            target: aarch64-unknown-linux-musl
             arch: aarch64
-          - target: armv7-unknown-linux-musleabihf
+            zig: true
+          - os: ubuntu-latest
+            os-name: linux
+            target: armv7-unknown-linux-musleabihf
             arch: armv7
+            zig: true
+          # macOS
+          - os: macos-latest
+            os-name: macos
+            target: aarch64-apple-darwin
+            arch: aarch64
+          - os: macos-latest
+            os-name: macos
+            target: x86_64-apple-darwin
+            arch: x86_64
+          # Windows
+          - os: windows-latest
+            os-name: windows
+            target: x86_64-pc-windows-msvc
+            arch: x86_64
+          - os: windows-latest
+            os-name: windows
+            target: aarch64-pc-windows-msvc
+            arch: aarch64
+
     steps:
       - uses: actions/checkout@v4
 
@@ -30,21 +59,42 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install cargo-zigbuild
+        if: matrix.zig
         run: pip install cargo-zigbuild
 
-      - name: Build
+      - name: Build (zigbuild)
+        if: matrix.zig
         run: cargo zigbuild --release --target ${{ matrix.target }}
 
-      - name: Run tests
-        run: cargo test
-        if: matrix.arch == 'x86_64'
+      - name: Build
+        if: ${{ !matrix.zig }}
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Run tests
+        if: matrix.os-name == 'linux' && matrix.arch == 'x86_64'
+        run: cargo test
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          ART="ytraceroute-${VERSION}-linux-${{ matrix.arch }}"
+          ART="ytraceroute-${VERSION}-${{ matrix.os-name }}-${{ matrix.arch }}"
           tar czf "${ART}.tar.gz" -C "target/${{ matrix.target }}/release" ytraceroute
-          sha256sum "${ART}.tar.gz" > "${ART}.tar.gz.sha256"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "${ART}.tar.gz" > "${ART}.tar.gz.sha256"
+          else
+            shasum -a 256 "${ART}.tar.gz" > "${ART}.tar.gz.sha256"
+          fi
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VERSION = $env:GITHUB_REF_NAME.Substring(1)
+          $ART = "ytraceroute-$VERSION-${{ matrix.os-name }}-${{ matrix.arch }}"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/ytraceroute.exe" -DestinationPath "$ART.zip"
+          "$((Get-FileHash "$ART.zip" -Algorithm SHA256).Hash.ToLower())  $ART.zip" | Out-File -Encoding ascii "$ART.zip.sha256"
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
@@ -52,4 +102,6 @@ jobs:
           files: |
             ytraceroute-*.tar.gz
             ytraceroute-*.tar.gz.sha256
+            ytraceroute-*.zip
+            ytraceroute-*.zip.sha256
           generate_release_notes: true

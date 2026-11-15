@@ -1,3 +1,5 @@
+[English](README.en.md) | **Русский**
+
 # ytraceroute
 
 Предиктивный traceroute для сетей Yggdrasil (v0.5.x). В Yggdrasil нет

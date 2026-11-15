@@ -7,6 +7,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -53,11 +54,17 @@ impl Endpoint {
 
     fn connect_blocking(&self, timeout: Duration) -> Result<Box<dyn ReadWrite>> {
         match self {
+            #[cfg(unix)]
             Endpoint::Unix(path) => {
                 let s = UnixStream::connect(path)
                     .with_context(|| format!("connecting to unix socket {}", path.display()))?;
                 s.set_read_timeout(Some(timeout))?;
                 Ok(Box::new(s))
+            }
+            #[cfg(not(unix))]
+            Endpoint::Unix(path) => {
+                let _ = path;
+                bail!("unix sockets are not supported on this platform; use tcp://")
             }
             Endpoint::Tcp(addr) => {
                 let s = TcpStream::connect(addr)
@@ -71,6 +78,7 @@ impl Endpoint {
 }
 
 trait ReadWrite: Read + Write {}
+#[cfg(unix)]
 impl ReadWrite for UnixStream {}
 impl ReadWrite for TcpStream {}
 
