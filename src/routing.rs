@@ -162,9 +162,14 @@ pub enum HopKind {
 
 pub fn classify(cur: &[u64], next: &[u64]) -> HopKind {
     let cp = crate::ygg::common_prefix_len(cur, next);
-    if cp == next.len() && next.len() < cur.len() {
+    // A tree edge is exactly ONE step: the direct parent (coords lose the
+    // last element) or a direct child (coords gain exactly one). Anything
+    // else — including a multi-level ancestor like [12,5] from [12,5,60,238]
+    // — must be an off-tree peering link, i.e. a shortcut, because a packet
+    // cannot traverse two tree edges in one hop.
+    if cp == next.len() && cur.len() == next.len() + 1 {
         HopKind::Up
-    } else if cp == cur.len() && cur.len() < next.len() {
+    } else if cp == cur.len() && next.len() == cur.len() + 1 {
         // Also covers cur == root ([]): everything from there is "down".
         HopKind::Down
     } else {
@@ -296,9 +301,15 @@ mod tests {
 
     #[test]
     fn classification() {
+        // Single tree steps.
         assert_eq!(classify(&[1, 2], &[1]), HopKind::Up);
         assert_eq!(classify(&[1], &[1, 2]), HopKind::Down);
-        assert_eq!(classify(&[1, 2], &[1, 3]), HopKind::Shortcut);
         assert_eq!(classify(&[], &[1]), HopKind::Down);
+        // A multi-level ancestor/descendant in one hop is an off-tree link.
+        assert_eq!(classify(&[1, 2, 3], &[1]), HopKind::Shortcut);
+        assert_eq!(classify(&[1], &[1, 2, 3]), HopKind::Shortcut);
+        // Diverging branches.
+        assert_eq!(classify(&[1, 2], &[1, 3]), HopKind::Shortcut);
+        assert_eq!(classify(&[1, 2, 3, 4], &[1, 2]), HopKind::Shortcut);
     }
 }
