@@ -20,8 +20,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::events::{Dir, Event, EventRx, SpecHop};
+use crate::opts::Opts;
 use crate::routing::HopKind;
 use crate::render::{fmt_coords, fmt_dur};
 use crate::ygg::{addr_for_key, tree_dist, Coords, Key};
@@ -445,7 +447,12 @@ fn dir_block_title(dir: Dir, st: &DirState, dest_label: &str, focused: bool) -> 
     format!("{arrow} {label}{focus_mark}{done}")
 }
 
-pub async fn run(mut rx: EventRx, abort: tokio::task::AbortHandle) -> i32 {
+pub async fn run(
+    opts: Opts,
+    mut rx: EventRx,
+    mut abort: tokio::task::AbortHandle,
+    mut cancel: CancellationToken,
+) -> i32 {
     let mut terminal = setup_terminal().expect("terminal setup");
     let mut state = TuiState::new();
     let (key_tx, mut key_rx) = mpsc::channel::<KeyEvent>(16);
@@ -476,6 +483,30 @@ pub async fn run(mut rx: EventRx, abort: tokio::task::AbortHandle) -> i32 {
                             state.quit = true;
                         }
                         (KeyCode::Char('c'), _) => {}
+                        (KeyCode::Char('r') | KeyCode::Char('R'), _) => {
+                            // Full retry: stop the current run completely —
+                            // the walks observe the token at their next loop
+                            // check and stop querying, the orchestrator task
+                            // is aborted — then bootstrap a fresh run.
+                            cancel.cancel();
+                            abort.abort();
+                            state = TuiState::new();
+                            state.warnings.push("retry: stopping the current trace…".into());
+                            let _ = terminal.draw(|f| draw(f, &state));
+                            match crate::app::App::bootstrap(&opts).await {
+                                Ok(app) => {
+                                    let (h, r, c) = app.spawn_run();
+                                    abort = h.abort_handle();
+                                    rx = r;
+                                    cancel = c;
+                                    closed = false;
+                                    state.warnings.clear();
+                                }
+                                Err(e) => {
+                                    state.warnings.push(format!("retry failed: {e:#}"));
+                                }
+                            }
+                        }
                         (KeyCode::Tab, _) => {
                             state.focus = match state.focus {
                                 Dir::Forward => Dir::Reverse,
@@ -675,7 +706,7 @@ fn draw(f: &mut ratatui::Frame, state: &TuiState) {
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(
-            "  tab:focus  v:single-pane  d:details  ↑↓:scroll  q:quit",
+            "  tab:focus  v:single-pane  d:details  r:retry  ↑↓:scroll  q:quit",
             Style::default().fg(Color::DarkGray),
         ),
         if let Some((_, saved, Some(path))) = &state.finished {

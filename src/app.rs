@@ -128,18 +128,28 @@ impl App {
 
     /// Run the trace in a spawned task; returns the join handle and the
     /// event stream (the consumer MUST keep draining events).
-    pub fn spawn_run(self: &Arc<Self>) -> (tokio::task::JoinHandle<Result<()>>, EventRx) {
+    /// Spawn the orchestration task. The returned cancellation token stops
+    /// the walks (gracefully, at their next loop check) without dropping
+    /// the channel; aborting the handle is the hard stop.
+    pub fn spawn_run(
+        self: &Arc<Self>,
+    ) -> (
+        tokio::task::JoinHandle<Result<()>>,
+        EventRx,
+        CancellationToken,
+    ) {
         let (tx, rx) = mpsc::channel(64);
+        let cancel = CancellationToken::new();
         let app = self.clone();
-        let handle = tokio::spawn(async move { app.run(tx).await });
-        (handle, rx)
+        let cancel_run = cancel.clone();
+        let handle = tokio::spawn(async move { app.run(tx, cancel_run).await });
+        (handle, rx, cancel)
     }
 
-    async fn run(self: &Arc<Self>, events: EventTx) -> Result<()> {
+    async fn run(self: &Arc<Self>, events: EventTx, cancel: CancellationToken) -> Result<()> {
         let cache_path = self.cache_path.clone();
         let cache_loaded = self.cache_loaded;
         let started = Instant::now();
-        let cancel = CancellationToken::new();
         let opts = &self.opts;
 
         // ---- Resolve the destination ------------------------------------

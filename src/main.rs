@@ -27,12 +27,12 @@ async fn main() -> Result<()> {
         && std::io::stderr().is_terminal();
 
     let app = app::App::bootstrap(&opts).await?;
-    let (handle, rx) = app.spawn_run();
+    let (handle, rx, cancel) = app.spawn_run();
 
     let code = if opts.json {
         render::json::run(rx).await
     } else if use_tui {
-        render::tui::run(rx, handle.abort_handle()).await
+        render::tui::run(opts.clone(), rx, handle.abort_handle(), cancel).await
     } else {
         render::stream::run(rx, opts.verbose).await
     };
