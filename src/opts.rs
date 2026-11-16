@@ -15,7 +15,8 @@ simulating the ironwood greedy tree-routing decision at every hop, using the adm
 traced in parallel; they may legitimately differ."
 )]
 pub struct Opts {
-    /// Destination: IPv6 address (02.. node or 03.. routed subnet), hex public key, or "self"
+    /// Destination: IPv6 address (02.. node or 03.. routed subnet), hex public
+    /// key, hostname (resolved via the system resolver, AAAA only), or "self"
     pub dest: String,
 
     /// Admin socket endpoint: unix:///var/run/yggdrasil.sock, tcp://host:port or a bare path.

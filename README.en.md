@@ -32,9 +32,9 @@ as hops and shortcuts confirm:
   shown immediately and collapsed on the fly as hops confirm;
 - output modes: TUI (terminal), stream (`--no-tui`, works over ssh without
   a terminal), NDJSON (`--json`);
-- destinations: node IPv6 address (`02…`), routed subnet (`03…`), hex key or
-  `self`; unknown addresses are resolved by probing through the overlay
-  (UDP) + `getSessions`;
+- destinations: node IPv6 address (`02…`), routed subnet (`03…`), hex key,
+  hostname (system resolver, AAAA only) or `self`; unknown addresses are
+  resolved by probing through the overlay (UDP) + `getSessions`;
 - persistent node cache (`~/.cache/ytraceroute/cache.json`): repeated and
   similar routes start from already-learned coordinates and peer lists;
 - exit codes: `0` — all directions delivered, `1` — dead end, `2` — error.

@@ -44,7 +44,7 @@ RTT и своему снимку дерева. «Срезы» (shortcut) — э�
 ```
 ytraceroute [OPTIONS] <DEST>
 
-DEST: 308:62:45:62:: | 208:84:68:55:2f91:8484:8d60:2fca | <64 hex> | self
+DEST: 308:62:45:62:: | 208:84:68:55:2f91:8484:8d60:2fca | <64 hex> | <hostname> | self
 
   -e, --endpoint     unix:///var/run/yggdrasil.sock (default), tcp://host:port
                      или путь; $YTRACEROUTE_ENDPOINT

@@ -346,9 +346,10 @@ impl App {
         Ok(())
     }
 
-    /// Resolve the destination input: hex key, "self", or an IPv6 address
+    /// Resolve the destination input: hex key, "self", an IPv6 address
     /// (node `02..` or routed subnet `03..`), optionally in socket-style
-    /// brackets ("[200:..:a]" — and "[200:..:a]:port", port ignored).
+    /// brackets ("[200:..:a]" — and "[200:..:a]:port", port ignored),
+    /// or a hostname (resolved via the system resolver, AAAA only).
     /// Address inputs are matched against every key we know
     /// (tree/paths/peers/cache); if that fails we send a UDP packet through
     /// the overlay (the "ping6 precheck") and match the session that appears
@@ -361,9 +362,10 @@ impl App {
         if let Ok(k) = Key::from_hex(t) {
             return Ok(k);
         }
-        let addr: Ipv6Addr = t
-            .parse()
-            .with_context(|| format!("destination {t:?} is neither a hex key nor an IPv6 address"))?;
+        let addr: Ipv6Addr = match t.parse() {
+            Ok(a) => a,
+            Err(_) => Self::resolve_hostname(t, events).await?,
+        };
         let octets = addr.octets();
         let is_subnet = (octets[0] & 0xfe) == 0x02 && (octets[0] & 0x01) == 1;
 
@@ -383,6 +385,32 @@ impl App {
             })
             .await;
         self.probe_and_match(addr, is_subnet).await
+    }
+
+    /// Resolve a hostname via the system resolver (getaddrinfo: honours
+    /// /etc/hosts, mDNS, /etc/resolver/... — whatever the OS consults).
+    /// The Yggdrasil address space is IPv6-only, so only AAAA results are
+    /// considered; if a name carries both Yggdrasil and foreign addresses,
+    /// ones inside 200::/7 win.
+    async fn resolve_hostname(host: &str, events: &EventTx) -> Result<Ipv6Addr> {
+        let resolved = tokio::net::lookup_host((host, 0))
+            .await
+            .with_context(|| format!("destination {host:?} is not an IPv6 address and hostname lookup failed"))?;
+        let v6: Vec<Ipv6Addr> = resolved
+            .filter_map(|sa| match sa {
+                std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
+                std::net::SocketAddr::V4(_) => None,
+            })
+            .collect();
+        let addr = pick_ygg_addr(&v6)
+            .with_context(|| format!("destination {host:?} has no IPv6 (AAAA) address"))?;
+        let _ = events
+            .send(Event::Warn {
+                dir: None,
+                msg: format!("resolved {host} -> {addr} (AAAA)"),
+            })
+            .await;
+        Ok(addr)
     }
 
     fn match_known_keys(&self, addr: &Ipv6Addr, is_subnet: bool) -> Option<Key> {
@@ -533,9 +561,20 @@ fn strip_brackets(s: &str) -> &str {
         .unwrap_or(s)
 }
 
+/// Of a name's AAAA results, prefer an address in the Yggdrasil range
+/// (200::/7: `02..` node addrs and `03..` routed subnets); otherwise
+/// fall back to the first IPv6.
+fn pick_ygg_addr(v6: &[Ipv6Addr]) -> Option<Ipv6Addr> {
+    v6.iter()
+        .find(|a| (a.octets()[0] & 0xfe) == 0x02)
+        .or_else(|| v6.first())
+        .copied()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::strip_brackets;
+    use super::{strip_brackets, pick_ygg_addr};
+    use std::net::Ipv6Addr;
 
     #[test]
     fn bracketed_addresses() {
@@ -546,5 +585,41 @@ mod tests {
         assert_eq!(strip_brackets("self"), "self");
         assert_eq!(strip_brackets("["), "");
         assert_eq!(strip_brackets("200::1]"), "200::1]");
+    }
+
+    #[test]
+    fn ygg_addr_preferred_over_foreign() {
+        let foreign = "2001:db8::1".parse::<Ipv6Addr>().unwrap();
+        let ygg = "0200:832f:2e56:91a6:678e:aaaf:80bf:4a8a"
+            .parse::<Ipv6Addr>()
+            .unwrap();
+        let subnet = "0300::abcd".parse::<Ipv6Addr>().unwrap();
+        // foreign first, ygg second: ygg wins
+        assert_eq!(pick_ygg_addr(&[foreign, ygg]), Some(ygg));
+        // routed subnet also wins over a foreign address
+        assert_eq!(pick_ygg_addr(&[foreign, subnet]), Some(subnet));
+        // only foreign: use it as-is
+        assert_eq!(pick_ygg_addr(&[foreign]), Some(foreign));
+        // nothing: no address
+        assert_eq!(pick_ygg_addr(&[]), None);
+    }
+
+    /// The system resolver path: "localhost" has ::1 in /etc/hosts on every
+    /// platform we support, and a bogus TLD must produce a readable error.
+    #[tokio::test]
+    async fn hostname_resolution() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let addr = super::App::resolve_hostname("localhost", &tx)
+            .await
+            .expect("localhost must resolve to an IPv6");
+        assert_eq!(addr, Ipv6Addr::LOCALHOST);
+
+        let err = super::App::resolve_hostname("no-such-host.invalid", &tx)
+            .await
+            .expect_err("bogus TLD must not resolve");
+        assert!(
+            err.to_string().contains("no IPv6") || err.to_string().contains("lookup failed"),
+            "got: {err:#}"
+        );
     }
 }
