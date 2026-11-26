@@ -470,10 +470,17 @@ pub async fn run(
     });
 
     let mut closed = false;
+    // Once the event channel closes, rx.recv() would resolve to None
+    // instantly and forever, turning the select into a busy loop that pegs
+    // a core redrawing unchanged frames — so gate the branch on `closed`.
+    let mut closed_at: Option<Instant> = None;
     let exit_code = loop {
         tokio::select! {
-            ev = rx.recv() => match ev {
-                None => { closed = true; }
+            ev = rx.recv(), if !closed => match ev {
+                None => {
+                    closed = true;
+                    closed_at = Some(Instant::now());
+                }
                 Some(e) => state.apply(e),
             },
             k = key_rx.recv() => {
@@ -539,8 +546,11 @@ pub async fn run(
         }
         if closed {
             // App finished; wait for the user to close (q), but auto-exit
-            // after a while so scripted TUI runs do not hang forever.
-            if state.started.elapsed() > Duration::from_secs(300) {
+            // after a while so scripted TUI runs do not hang forever. The
+            // timer runs from the moment the trace ended, not from TUI
+            // start — otherwise a trace longer than the limit would close
+            // the instant it completes, before the result can be read.
+            if closed_at.is_some_and(|t| t.elapsed() > Duration::from_secs(300)) {
                 break state.exit_code();
             }
             // Keep drawing until q.
