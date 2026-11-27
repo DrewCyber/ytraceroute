@@ -39,6 +39,10 @@ as hops and shortcuts confirm:
   on Windows, the root of `$XDG_CACHE_HOME` on Linux/macOS, current
   directory as the fallback; override with `--cache-file`): repeated and
   similar routes start from already-learned coordinates and peer lists;
+- a hop that is a known public node gets its public endpoint on the line
+  below (lists at `publicpeers.neilalexander.dev` and
+  `peers.yggdrasil.link`, cached as `ytraceroute_peers.json` next to the
+  node cache for 1 hour; if the lists are unreachable, silently no labels);
 - exit codes: `0` — all directions delivered, `1` — dead end, `2` — error.
 
 ## Usage

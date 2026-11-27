@@ -6,6 +6,7 @@ mod events;
 mod model;
 mod opts;
 mod persist;
+mod publicpeers;
 mod render;
 mod routing;
 mod walk;

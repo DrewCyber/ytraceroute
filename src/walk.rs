@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::admin::AdminClient;
 use crate::events::{Dir, Event, EventTx};
 use crate::model::NodeCache;
+use crate::publicpeers::PublicPeers;
 use crate::routing::{candidates, classify, hop_trust, select_next, TrustLevel};
 use crate::ygg::{tree_dist, Coords, Key};
 
@@ -58,6 +59,8 @@ pub struct WalkCtx {
     /// Probe-priority hints: the destination's tree view (its ancestry and
     /// peers) plus our own tree keys. Empty set degrades to a full scan.
     pub hints: Arc<std::collections::HashSet<Key>>,
+    /// Known public-node endpoints (key → host); empty means no labels.
+    pub public: Arc<PublicPeers>,
 }
 
 /// Fire-and-forget prefetch of the next hop's peer list.
@@ -439,6 +442,7 @@ pub async fn walk(ctx: Arc<WalkCtx>) {
                 cached,
                 trust: hop_trust.0,
                 trust_notes: hop_trust.1,
+                public_ip: ctx.public.lookup(&next.key).map(str::to_string),
             })
             .await;
         let skipped: usize = skipped as usize;
@@ -524,6 +528,7 @@ fn restart_with(ctx: Arc<WalkCtx>, target_coords: Coords, hops: usize) {
         events: ctx.events.clone(),
         cancel: ctx.cancel.clone(),
         hints: ctx.hints.clone(),
+        public: ctx.public.clone(),
     });
     tokio::spawn(async move {
         let _ = events

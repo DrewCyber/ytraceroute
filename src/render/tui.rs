@@ -40,6 +40,7 @@ struct HopRow {
     nodeinfo: Option<(String, String)>,
     trust: crate::routing::TrustLevel,
     trust_notes: Vec<String>,
+    public_ip: Option<String>,
 }
 
 #[derive(Default)]
@@ -68,6 +69,7 @@ impl DirState {
             rtt,
             trust,
             trust_notes,
+            public_ip,
             ..
         } = ev
         {
@@ -82,6 +84,7 @@ impl DirState {
                 nodeinfo: None,
                 trust: *trust,
                 trust_notes: trust_notes.clone(),
+                public_ip: public_ip.clone(),
             });
             // Everything the shortcut jumped over is no longer plausible.
             if let Some(t) = &self.target_coords {
@@ -387,6 +390,13 @@ fn hop_lines(st: &DirState, detail: bool) -> Vec<Line<'static>> {
             spans.push(Span::styled(format!("  ℹ {bn} {bv}"), Style::default().fg(Color::DarkGray)));
         }
         lines.push(Line::from(spans));
+        // A known public node: its public endpoint on the next line.
+        if let Some(ip) = &h.public_ip {
+            lines.push(Line::from(Span::styled(
+                format!("   ↳ public: {ip}"),
+                Style::default().fg(Color::Cyan),
+            )));
+        }
     }
     // Shortcut / dead-end / done notes
     for n in &st.notes {

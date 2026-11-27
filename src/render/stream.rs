@@ -205,6 +205,7 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                 cached,
                 trust,
                 trust_notes,
+                public_ip,
             } => {
                 let cached_mark = if *cached { c.dim(" ⛁") } else { String::new() };
                 let stale_mark = if *stale { c.yellow(" ~") } else { String::new() };
@@ -227,14 +228,19 @@ pub async fn run(mut rx: EventRx, verbose: bool) -> i32 {
                 } else {
                     String::new()
                 };
-                format!(
+                let mut line = format!(
                     "{} {:>2}  {}  {}  {:<22} {d_before}->{d_after} {rtt}{cached_mark}{stale_mark}{trust_mark}{trust_note}",
                     dir_arrow(&c, *dir),
                     n,
                     addr_for_key(key),
                     c.dim(&short(key)),
                     c.dim(&fmt_coords(coords)),
-                )
+                );
+                // A known public node: its public endpoint on the next line.
+                if let Some(ip) = public_ip {
+                    line.push_str(&format!("\n   {}", c.cyan(&format!("↳ public: {ip}"))));
+                }
+                line
             }
             Event::ShortcutApplied {
                 dir,

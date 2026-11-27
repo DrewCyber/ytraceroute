@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::admin::{AdminClient, Endpoint};
 use crate::events::{Dir, Event, EventRx, EventTx, SpecHop};
+use crate::publicpeers;
 use crate::model::{NodeCache, NodeData};
 use crate::opts::Opts;
 use crate::persist;
@@ -30,6 +31,9 @@ pub struct App {
     pub self_link_costs: HashMap<Key, u64>,
     cache_path: Option<std::path::PathBuf>,
     cache_loaded: usize,
+    /// Public-node endpoints for labeling hops (empty when the lists are
+    /// unavailable — silently means "no labels").
+    pub peers: Arc<publicpeers::PublicPeers>,
 }
 
 impl App {
@@ -67,6 +71,13 @@ impl App {
                 Err(_) => {}
             }
         }
+
+        // Public peers list: fetch in the background so the network fetch
+        // overlaps the admin bootstrap. Silent on failure (no labels then).
+        let peers_cache_path = publicpeers::cache_path(cache_path.as_deref());
+        let peers_task = tokio::spawn(async move {
+            publicpeers::acquire(peers_cache_path.as_deref()).await
+        });
 
         let getself = admin
             .get_self()
@@ -112,6 +123,9 @@ impl App {
         if let Ok(paths) = paths {
             cache.harvest_paths(&paths);
         }
+        let public_peers = peers_task
+            .await
+            .unwrap_or_else(|_| Arc::new(publicpeers::PublicPeers::default()));
 
         Ok(Arc::new(App {
             opts: opts.clone(),
@@ -123,6 +137,7 @@ impl App {
             self_link_costs,
             cache_path,
             cache_loaded,
+            peers: public_peers,
         }))
     }
 
@@ -253,6 +268,7 @@ impl App {
                 events: events.clone(),
                 cancel: cancel.clone(),
                 hints: hints.clone(),
+                public: self.peers.clone(),
             });
             handles.push(tokio::spawn(walk(ctx)));
         }
@@ -286,6 +302,7 @@ impl App {
                 events: events.clone(),
                 cancel: cancel.clone(),
                 hints: hints.clone(),
+                public: self.peers.clone(),
             });
             handles.push(tokio::spawn(walk(ctx)));
         }

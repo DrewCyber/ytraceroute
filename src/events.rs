@@ -99,6 +99,9 @@ pub enum Event {
         cached: bool,
         trust: TrustLevel,
         trust_notes: Vec<String>,
+        /// Public endpoint host, if the hop is a known public node.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        public_ip: Option<String>,
     },
     /// Aggregate confidence of one direction's route (emitted right
     /// before its Done event).
