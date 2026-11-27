@@ -125,9 +125,10 @@ Get-Content out.txt | Select-Object -First 20
 .\ytraceroute.exe --no-tui <dest>
 .\ytraceroute.exe --no-tui <dest>
 ```
-Ожидание: файл `%LocalAppData%\ytraceroute\cache.json` создан
-(`dirs::cache_dir()` на Windows = LocalAppData); второй прогон заметно
-быстрее, в шапке `cache: N nodes loaded`. Ошибка сохранения → F-CACHE.
+Ожидание: файл `ytraceroute_cache.json` в пользовательском TEMP создан
+(путь = `[Environment]::GetEnvironmentVariable('TEMP','User')`, не
+процессный TEMP); второй прогон заметно быстрее, в шапке
+`cache: N nodes loaded`. Ошибка сохранения → F-CACHE.
 
 ### T13. Коды выхода
 ```

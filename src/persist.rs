@@ -1,10 +1,12 @@
 //! Persistent on-disk node cache so that repeated or similar traces start
 //! from what was learned last run.
 //!
-//! JSON at $XDG_CACHE_HOME/ytraceroute/cache.json (fallback ~/.cache/...),
-//! written atomically (tmp + rename), LRU-trimmed by last_seen. Entries keep
-//! epoch-ms timestamps; freshness is judged against --cache-ttl at use time,
-//! so an old file degrades gracefully into stale hints.
+//! `ytraceroute_cache.json` directly in the base directory — the user TEMP
+//! on Windows (the user-scope registry value, not the process one),
+//! $XDG_CACHE_HOME on Linux/macOS, the current directory as the fallback.
+//! Written atomically (tmp + rename), LRU-trimmed by last_seen. Entries
+//! keep epoch-ms timestamps; freshness is judged against --cache-ttl at
+//! use time, so an old file degrades gracefully into stale hints.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -36,8 +38,102 @@ struct PersistFile {
     nodes: HashMap<String, PersistNode>,
 }
 
+/// Cache file name, placed directly in the base directory — no per-app
+/// subdirectory.
+const CACHE_FILE_NAME: &str = "ytraceroute_cache.json";
+
+/// Default cache location, `<base>/ytraceroute_cache.json`:
+/// - Windows: the *user-scope* TEMP directory — the `HKCU\Environment\TEMP`
+///   registry value, i.e. what .NET's
+///   `[Environment]::GetEnvironmentVariable("TEMP", "User")` returns. The
+///   process `TEMP` is deliberately not used: for services or elevated
+///   shells it points at the system temp instead of the user's own.
+/// - Linux/macOS: `$XDG_CACHE_HOME` (its root, no subdirectory).
+/// - Fallback everywhere: the current working directory.
 pub fn default_cache_path() -> Option<PathBuf> {
-    dirs::cache_dir().map(|d| d.join("ytraceroute").join("cache.json"))
+    #[cfg(windows)]
+    {
+        user_temp_dir().map(|d| d.join(CACHE_FILE_NAME))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("XDG_CACHE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(|base| PathBuf::from(base).join(CACHE_FILE_NAME))
+            .or_else(cwd_cache_path)
+    }
+}
+
+/// The spec fallback: `ytraceroute_cache.json` in the current working
+/// directory.
+#[cfg(not(windows))]
+fn cwd_cache_path() -> Option<PathBuf> {
+    std::env::current_dir().ok().map(|d| d.join(CACHE_FILE_NAME))
+}
+
+/// The user-scope TEMP directory on Windows.
+#[cfg(windows)]
+fn user_temp_dir() -> Option<PathBuf> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let env = hkcu.open_subkey("Environment").ok()?;
+    let raw: String = env.get_value("TEMP").ok()?;
+    // The value is typically REG_EXPAND_SZ ("%USERPROFILE%\AppData\Local\Temp").
+    let dir = PathBuf::from(expand_percent_vars(&raw));
+    if dir.is_absolute() {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// Expand `%VAR%` references using the process environment; unknown names
+/// are kept literal.
+#[cfg(windows)]
+fn expand_percent_vars(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('%') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after.find('%') {
+            Some(close) => {
+                let name = &after[..close];
+                match std::env::var(name) {
+                    Ok(v) => out.push_str(&v),
+                    Err(_) => {
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                rest = &after[close + 1..];
+            }
+            None => {
+                // No closing '%': keep it literal.
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::expand_percent_vars;
+
+    #[test]
+    fn percent_expansion() {
+        std::env::set_var("YTR_TEST_VAR", "hello");
+        assert_eq!(expand_percent_vars("%YTR_TEST_VAR%\\sub"), "hello\\sub");
+        assert_eq!(expand_percent_vars("plain"), "plain");
+        assert_eq!(expand_percent_vars("%NO_SUCH_VAR%"), "%NO_SUCH_VAR%");
+        assert_eq!(expand_percent_vars("a%b"), "a%b");
+        assert_eq!(expand_percent_vars("%YTR_TEST_VAR%"), "hello");
+    }
 }
 
 pub fn load(cache: &NodeCache, path: &Path) -> Result<usize> {

@@ -35,7 +35,9 @@ as hops and shortcuts confirm:
 - destinations: node IPv6 address (`02…`), routed subnet (`03…`), hex key,
   hostname (system resolver, AAAA only) or `self`; unknown addresses are
   resolved by probing through the overlay (UDP) + `getSessions`;
-- persistent node cache (`~/.cache/ytraceroute/cache.json`): repeated and
+- persistent node cache (`ytraceroute_cache.json`: the user TEMP directory
+  on Windows, the root of `$XDG_CACHE_HOME` on Linux/macOS, current
+  directory as the fallback; override with `--cache-file`): repeated and
   similar routes start from already-learned coordinates and peer lists;
 - exit codes: `0` — all directions delivered, `1` — dead end, `2` — error.
 

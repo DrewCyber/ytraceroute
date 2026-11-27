@@ -73,7 +73,8 @@ pub struct Opts {
     #[arg(long)]
     pub no_cache: bool,
 
-    /// Custom cache file location
+    /// Cache file location (default: user TEMP on Windows, $XDG_CACHE_HOME
+    /// on Linux/macOS, current directory as the fallback)
     #[arg(long)]
     pub cache_file: Option<PathBuf>,
 
